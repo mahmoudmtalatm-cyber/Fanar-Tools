@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fanar — File Converter</title>
+<link rel="icon" href="../../assets/logo.png">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.11.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy-deep:#0B2340;
+    --navy:#12365C;
+    --blue:#2E6FB0;
+    --blue-soft:#DCEAF7;
+    --gold:#F0A93E;
+    --gold-soft:#FCE3B2;
+    --paper:#F6FAFD;
+    --ink:#10233B;
+    --ink-mute:#5C7690;
+    --line:#E1EBF4;
+    --radius:18px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:'Inter',system-ui,sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+  .app{
+    max-width:430px; margin:0 auto; min-height:100vh;
+    display:flex; flex-direction:column; background:var(--paper); position:relative;
+  }
+  .topbar{
+    display:flex; align-items:center; gap:9px;
+    padding:calc(env(safe-area-inset-top,0px) + 16px) 20px 14px;
+  }
+  .topbar .back{
+    width:30px; height:30px; border-radius:9px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--ink-mute); background:#fff; border:1.5px solid var(--line); cursor:pointer;
+  }
+  .topbar .mark{width:26px; height:26px; flex-shrink:0; border-radius:50%; object-fit:cover;}
+  .topbar .word{ font-family:'Space Grotesk', sans-serif; font-weight:700; font-size:16px; letter-spacing:0.02em; color:var(--navy-deep);}
+  .topbar .word span{color:var(--blue);}
+
+  .screen{ display:none; flex:1; flex-direction:column; padding:6px 20px 28px; animation:fade .35s ease both; }
+  .screen.active{display:flex;}
+  @keyframes fade{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+
+  .hero{ text-align:center; padding:14px 0 8px; }
+  .badge-wrap{ position:relative; width:120px; height:120px; margin:0 auto 18px; display:flex; align-items:center; justify-content:center; }
+  .beam-sweep{ position:absolute; inset:-12px; border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0deg, rgba(240,169,62,0.0) 40deg, rgba(240,169,62,0.35) 90deg, rgba(240,169,62,0.0) 140deg, transparent 360deg);
+    animation:spin 6s linear infinite; }
+  @media (prefers-reduced-motion: reduce){ .beam-sweep{animation:none;} }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .badge-logo{ position:relative; z-index:1; width:96px; height:96px; border-radius:50%; box-shadow:0 10px 26px -8px rgba(11,35,64,0.45); object-fit:cover; background:#fff; }
+  h1.title{ font-family:'Space Grotesk', sans-serif; font-weight:600; font-size:21px; line-height:1.28; color:var(--navy-deep); margin-bottom:8px; }
+  p.sub{ font-size:14px; color:var(--ink-mute); line-height:1.5; max-width:300px; margin:0 auto; }
+
+  .dropzone{
+    margin-top:22px; background:#fff; border:1.5px dashed var(--line); border-radius:var(--radius);
+    padding:26px 18px; text-align:center; cursor:pointer; transition:border-color .15s ease, background .15s ease;
+  }
+  .dropzone.drag{ border-color:var(--blue); background:var(--blue-soft); }
+  .dropzone svg{ margin:0 auto 10px; color:var(--blue); }
+  .dropzone b{ display:block; font-size:14.5px; margin-bottom:3px; }
+  .dropzone span{ font-size:12.5px; color:var(--ink-mute); }
+  #file-input{ display:none; }
+
+  .picked-row{
+    margin-top:14px; display:none; align-items:center; gap:12px;
+    background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px 14px;
+  }
+  .picked-row.show{ display:flex; }
+  .picked-icon{ width:34px; height:40px; flex-shrink:0; border-radius:5px; background:linear-gradient(160deg, var(--blue), var(--navy)); display:flex; align-items:center; justify-content:center; color:#fff; font-family:'Space Grotesk'; font-size:9px; font-weight:700; text-align:center; line-height:1.1; padding:2px; }
+  .picked-meta{ flex:1; min-width:0; }
+  .picked-meta b{ display:block; font-size:13.5px; word-break:break-word; line-height:1.3; }
+  .picked-meta span{ font-size:11.5px; color:var(--ink-mute); }
+  .picked-clear{ color:var(--ink-mute); cursor:pointer; flex-shrink:0; }
+
+  .section-label{ margin:20px 0 10px; font-size:12.5px; font-weight:600; color:var(--ink-mute); text-transform:uppercase; letter-spacing:0.06em; }
+
+  .format-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  .format-chip{
+    background:#fff; border:1.5px solid var(--line); border-radius:14px; padding:12px 12px;
+    display:flex; align-items:center; gap:10px; cursor:pointer; transition:border-color .12s ease, background .12s ease;
+  }
+  .format-chip.active{ border-color:var(--blue); background:var(--blue-soft); }
+  .format-chip .fc-icon{ width:30px; height:34px; flex-shrink:0; border-radius:5px; background:var(--blue-soft); color:var(--blue); display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono'; font-size:8.5px; font-weight:700; }
+  .format-chip.active .fc-icon{ background:var(--blue); color:#fff; }
+  .format-chip .fc-label{ font-size:12.5px; font-weight:600; line-height:1.25; }
+
+  .btn{ width:100%; border:none; border-radius:14px; font-family:'Space Grotesk', sans-serif; font-weight:600; font-size:15.5px; padding:16px 18px; display:flex; align-items:center; justify-content:center; gap:8px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease, opacity .12s ease; }
+  .btn:active{transform:scale(0.98);}
+  .btn-primary{ margin-top:18px; background:linear-gradient(135deg, var(--gold) 0%, #E8983B 100%); color:var(--navy-deep); box-shadow:0 10px 22px -10px rgba(240,169,62,0.75); }
+  .btn-primary:disabled{opacity:0.45; box-shadow:none; cursor:not-allowed;}
+  .btn-ghost{ background:#fff; color:var(--blue); border:1.5px solid var(--line); }
+  .btn-secondary{ background:var(--blue-soft); color:var(--navy); }
+
+  .steps{ margin-top:28px; display:flex; flex-direction:column; gap:16px; }
+  .step{ display:flex; gap:13px; align-items:flex-start; }
+  .step .dot{ width:26px; height:26px; border-radius:50%; flex-shrink:0; background:var(--blue-soft); color:var(--blue); display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono'; font-size:11.5px; font-weight:500; }
+  .step .txt b{display:block; font-size:14px; font-weight:600; color:var(--ink); margin-bottom:1px;}
+  .step .txt span{font-size:12.5px; color:var(--ink-mute); line-height:1.4;}
+
+  .scan-panel{ margin-top:22px; background:var(--navy-deep); border-radius:20px; padding:26px 20px 22px; color:#fff; position:relative; overflow:hidden; }
+  .scan-panel::before{ content:''; position:absolute; inset:0; background: radial-gradient(circle at 20% -10%, rgba(46,111,176,0.35), transparent 55%), radial-gradient(circle at 90% 110%, rgba(240,169,62,0.18), transparent 50%); }
+  .scan-title{ position:relative; font-family:'Space Grotesk'; font-weight:600; font-size:15.5px; margin-bottom:2px; }
+  .scan-sub{position:relative; font-size:12.5px; color:#9FB4CC; margin-bottom:20px;}
+  .ruler{ position:relative; height:46px; background:rgba(255,255,255,0.06); border-radius:10px; overflow:hidden; margin-bottom:14px; }
+  .ruler .fill{ position:absolute; top:0; left:0; bottom:0; width:0%; background:linear-gradient(90deg, rgba(240,169,62,0.0), rgba(240,169,62,0.55)); transition:width .25s linear; }
+  .scan-stats{ position:relative; display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px; }
+  .scan-stats .pct{font-family:'Space Grotesk'; font-weight:700; font-size:26px;}
+  .scan-stats .found{font-family:'IBM Plex Mono'; font-size:12.5px; color:var(--gold-soft);}
+  .log{ position:relative; background:rgba(0,0,0,0.22); border-radius:12px; padding:12px 14px; height:112px; overflow:hidden; font-family:'IBM Plex Mono'; font-size:11.5px; line-height:1.9; color:#BFD3E8; }
+  .log div{white-space:nowrap; opacity:0; animation:logIn .3s ease forwards;}
+  @keyframes logIn{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+  .cancel-link{ margin-top:18px; text-align:center; font-size:13px; color:var(--ink-mute); text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+
+  .result-card{ background:#fff; border:1.5px solid var(--line); border-radius:20px; padding:20px; margin-top:14px; }
+  .result-head{ display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  .check{ width:38px; height:38px; border-radius:50%; flex-shrink:0; background:var(--gold-soft); color:#B5762A; display:flex; align-items:center; justify-content:center; }
+  .result-head b{font-family:'Space Grotesk'; font-size:15.5px; display:block;}
+  .result-head span{font-size:12.5px; color:var(--ink-mute);}
+  .file-row{ margin-top:16px; display:flex; align-items:center; gap:12px; background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:12px 14px; }
+  .file-icon{ width:34px; height:40px; flex-shrink:0; border-radius:5px; background:linear-gradient(160deg, var(--blue), var(--navy)); display:flex; align-items:center; justify-content:center; color:#fff; font-family:'Space Grotesk'; font-size:9px; font-weight:700; }
+  .file-meta b{display:block; font-size:13.5px; word-break:break-word; line-height:1.3;}
+  .file-meta span{font-size:11.5px; color:var(--ink-mute);}
+  .result-actions{ margin-top:22px; display:flex; flex-direction:column; gap:10px; }
+  .note{ margin-top:12px; font-size:12px; color:var(--ink-mute); text-align:center; line-height:1.5; }
+
+  .error-box{ margin-top:16px; background:#FBEAE6; border:1.5px solid #F0C4B8; color:#C1503B; border-radius:14px; padding:12px 14px; font-size:13px; display:none; }
+  .error-box.show{ display:block; }
+
+  svg{display:block;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="back" id="home-link">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg>
+    </div>
+    <img class="mark" src="../../assets/logo.png" alt="Fanar">
+    <div class="word">FANAR <span>· convert</span></div>
+  </div>
+
+  <!-- ============ SCREEN 1 — HOME / UPLOAD ============ -->
+  <main class="screen active" id="screen-home">
+    <div class="hero">
+      <div class="badge-wrap">
+        <div class="beam-sweep"></div>
+        <img class="badge-logo" src="../../assets/logo.png" alt="Fanar">
+      </div>
+      <h1 class="title">Convert any file<br>right on your phone</h1>
+      <p class="sub">PowerPoint ⇄ PDF, images, Word docs, and text files — nothing ever leaves your device.</p>
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+      <b>Tap to choose a file</b>
+      <span>PPTX, PDF, DOCX, images, or text</span>
+    </div>
+    <input type="file" id="file-input">
+
+    <div class="picked-row" id="picked-row">
+      <div class="picked-icon" id="picked-icon">FILE</div>
+      <div class="picked-meta"><b id="picked-name">—</b><span id="picked-meta">—</span></div>
+      <svg class="picked-clear" id="picked-clear" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </div>
+
+    <div id="format-section" style="display:none;">
+      <div class="section-label">Convert to</div>
+      <div class="format-grid" id="format-grid"></div>
+    </div>
+
+    <div class="error-box" id="error-box"></div>
+
+    <button class="btn btn-primary" id="convert-btn" disabled>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="M16 21l4-4-4-4"/><path d="M20 17H4"/></svg>
+      Convert file
+    </button>
+
+    <div class="steps">
+      <div class="step">
+        <div class="dot">01</div>
+        <div class="txt"><b>Upload any file</b><span>PowerPoint, PDF, Word, an image, or plain text.</span></div>
+      </div>
+      <div class="step">
+        <div class="dot">02</div>
+        <div class="txt"><b>Pick a target format</b><span>Fanar shows only the formats it can reliably convert to.</span></div>
+      </div>
+      <div class="step">
+        <div class="dot">03</div>
+        <div class="txt"><b>Get your file</b><span>Download it or share it straight back into this chat.</span></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ SCREEN 2 — PROCESSING ============ -->
+  <main class="screen" id="screen-processing">
+    <div class="scan-panel">
+      <div class="scan-title">Converting your file</div>
+      <div class="scan-sub" id="scan-sub">Reading file…</div>
+
+      <div class="ruler">
+        <div class="fill" id="ruler-fill"></div>
+      </div>
+
+      <div class="scan-stats">
+        <div class="pct" id="pct">0%</div>
+        <div class="found" id="found"></div>
+      </div>
+
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="cancel-link" id="cancel-btn">Cancel</div>
+  </main>
+
+  <!-- ============ SCREEN 3 — RESULT ============ -->
+  <main class="screen" id="screen-result">
+    <div class="result-card">
+      <div class="result-head">
+        <div class="check">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+        <div>
+          <b>Conversion complete</b>
+          <span id="result-sub">Ready to download</span>
+        </div>
+      </div>
+
+      <div class="file-row">
+        <div class="file-icon" id="result-icon">FILE</div>
+        <div class="file-meta">
+          <b id="file-name">output</b>
+          <span id="file-meta-text">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="result-actions">
+      <button class="btn btn-primary" id="download-btn">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>
+        Download file
+      </button>
+      <button class="btn btn-secondary" id="share-btn" style="display:none;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+        Share to chat
+      </button>
+      <button class="btn btn-ghost" id="open-btn">Open in new tab</button>
+      <button class="btn btn-ghost" id="new-btn">Convert another file</button>
+    </div>
+    <p class="note">If "Download" doesn't do anything on your device, try "Open in new tab" — you can then save it from there (on iPhone, use the Share icon).</p>
+  </main>
+
+</div>
+
+<script>
+  // ---------- Telegram Mini App wiring ----------
+  const tg = window.Telegram ? window.Telegram.WebApp : null;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    try {
+      tg.setHeaderColor('#0B2340');
+      tg.setBackgroundColor('#F6FAFD');
+    } catch(e) {}
+  }
+
+  document.getElementById('home-link').addEventListener('click', () => {
+    window.location.href = '../../index.html';
+  });
+
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+
+  // ---------- Screen management ----------
+  const homeScreen = document.getElementById('screen-home');
+  const procScreen = document.getElementById('screen-processing');
+  const resultScreen = document.getElementById('screen-result');
+  function showScreen(el){
+    [homeScreen, procScreen, resultScreen].forEach(s => s.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  // ---------- Format catalogue ----------
+  // Each category lists the target formats Fanar can reliably produce client-side.
+  const CATEGORY_EXTS = {
+    image: ['jpg','jpeg','png','webp','bmp'],
+    pdf: ['pdf'],
+    pptx: ['pptx'],
+    docx: ['docx'],
+    text: ['txt','md','markdown']
+  };
+  const TARGETS = {
+    image: [
+      {id:'png', label:'PNG image', ext:'png'},
+      {id:'jpg', label:'JPG image', ext:'jpg'},
+      {id:'webp', label:'WEBP image', ext:'webp'},
+      {id:'pdf', label:'PDF document', ext:'pdf'},
+      {id:'pptx', label:'PowerPoint slide', ext:'pptx'}
+    ],
+    pdf: [
+      {id:'pptx', label:'PowerPoint (.pptx)', ext:'pptx'},
+      {id:'png', label:'Images (.png)', ext:'png'},
+      {id:'txt', label:'Plain text (.txt)', ext:'txt'}
+    ],
+    pptx: [
+      {id:'pdf', label:'PDF document', ext:'pdf'},
+      {id:'png', label:'Images (.png)', ext:'png'}
+    ],
+    docx: [
+      {id:'pdf', label:'PDF document', ext:'pdf'},
+      {id:'txt', label:'Plain text (.txt)', ext:'txt'}
+    ],
+    text: [
+      {id:'pdf', label:'PDF document', ext:'pdf'}
+    ]
+  };
+  const ICON_TEXT = { image:'IMG', pdf:'PDF', pptx:'PPT', docx:'DOC', text:'TXT' };
+
+  function detectCategory(filename){
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    for (const cat in CATEGORY_EXTS){
+      if (CATEGORY_EXTS[cat].includes(ext)) return { cat, ext };
+    }
+    return null;
+  }
+
+  // ---------- State ----------
+  let currentFile = null;
+  let currentCategory = null;
+  let selectedTarget = null;
+  let cancelRequested = false;
+
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('file-input');
+  const pickedRow = document.getElementById('picked-row');
+  const pickedIcon = document.getElementById('picked-icon');
+  const pickedName = document.getElementById('picked-name');
+  const pickedMeta = document.getElementById('picked-meta');
+  const pickedClear = document.getElementById('picked-clear');
+  const formatSection = document.getElementById('format-section');
+  const formatGrid = document.getElementById('format-grid');
+  const convertBtn = document.getElementById('convert-btn');
+  const errorBox = document.getElementById('error-box');
+
+  function showError(msg){ errorBox.textContent = msg; errorBox.classList.add('show'); }
+  function clearError(){ errorBox.classList.remove('show'); errorBox.textContent = ''; }
+
+  function fmtBytes(b){
+    if (b < 1024*1024) return (b/1024).toFixed(0) + ' KB';
+    return (b/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  ['dragover','dragenter'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+  dropzone.addEventListener('drop', e => {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+  pickedClear.addEventListener('click', (e) => { e.stopPropagation(); resetFile(); });
+
+  function resetFile(){
+    currentFile = null;
+    currentCategory = null;
+    selectedTarget = null;
+    pickedRow.classList.remove('show');
+    formatSection.style.display = 'none';
+    formatGrid.innerHTML = '';
+    convertBtn.disabled = true;
+    fileInput.value = '';
+    clearError();
+  }
+
+  function handleFile(file){
+    clearError();
+    const detected = detectCategory(file.name);
+    if (!detected){
+      showError('That file type isn\'t supported yet. Fanar currently converts: images, PDF, PowerPoint, Word, and plain text files.');
+      return;
+    }
+    currentFile = file;
+    currentCategory = detected.cat;
+    selectedTarget = null;
+    convertBtn.disabled = true;
+
+    pickedIcon.textContent = ICON_TEXT[currentCategory];
+    pickedName.textContent = file.name;
+    pickedMeta.textContent = fmtBytes(file.size);
+    pickedRow.classList.add('show');
+
+    const targets = TARGETS[currentCategory] || [];
+    formatGrid.innerHTML = '';
+    targets.forEach(t => {
+      const chip = document.createElement('div');
+      chip.className = 'format-chip';
+      chip.dataset.id = t.id;
+      chip.innerHTML = '<div class="fc-icon">' + t.ext.toUpperCase().slice(0,4) + '</div><div class="fc-label">' + t.label + '</div>';
+      chip.addEventListener('click', () => {
+        Array.from(formatGrid.children).forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        selectedTarget = t;
+        convertBtn.disabled = false;
+      });
+      formatGrid.appendChild(chip);
+    });
+    formatSection.style.display = 'block';
+  }
+
+  // ---------- Progress UI ----------
+  const scanSub = document.getElementById('scan-sub');
+  const pctEl = document.getElementById('pct');
+  const foundEl = document.getElementById('found');
+  const rulerFill = document.getElementById('ruler-fill');
+  const logEl = document.getElementById('log');
+
+  function updateProgress(pct){
+    pctEl.textContent = Math.round(pct) + '%';
+    rulerFill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  }
+  function addLogLine(text){
+    const d = document.createElement('div');
+    d.textContent = text;
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function onProgress(pct, msg){
+    updateProgress(pct);
+    if (msg){ scanSub.textContent = msg; addLogLine(msg); }
+  }
+
+  // ---------- Helpers shared by converters ----------
+  function loadImageEl(blob){
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = (e) => { URL.revokeObjectURL(url); reject(new Error('Could not read image.')); };
+      img.src = url;
+    });
+  }
+  function canvasToBlob(canvas, mime, quality){
+    return new Promise(resolve => canvas.toBlob(resolve, mime, quality));
+  }
+  function baseName(name){
+    return (name || 'file').replace(/\.[^/.]+$/, '').replace(/[^a-z0-9\-_ ]/gi, '').trim().replace(/\s+/g,'_') || 'file';
+  }
+  const EMU_PER_PT = 12700;
+
+  // ---------- Image conversions ----------
+  async function imageToImage(file, targetExt){
+    onProgress(20, 'Reading image…');
+    const img = await loadImageEl(file);
+    onProgress(55, 'Redrawing pixels…');
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (targetExt === 'jpg'){ ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+    ctx.drawImage(img, 0, 0);
+    const mime = targetExt === 'jpg' ? 'image/jpeg' : (targetExt === 'webp' ? 'image/webp' : 'image/png');
+    onProgress(85, 'Encoding output…');
+    const blob = await canvasToBlob(canvas, mime, 0.92);
+    return { blob, ext: targetExt, mime };
+  }
+  async function imageToPdf(file){
+    onProgress(20, 'Reading image…');
+    const img = await loadImageEl(file);
+    onProgress(60, 'Building PDF…');
+    const { jsPDF } = window.jspdf;
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const doc = new jsPDF({ unit:'px', format:[w,h], orientation: w >= h ? 'l':'p' });
+    doc.addImage(img, w >= h ? 'l':'p' , 0, 0, w, h);
+    onProgress(90, 'Finalizing…');
+    return { blob: doc.output('blob'), ext:'pdf', mime:'application/pdf' };
+  }
+  async function imageToPptx(file){
+    onProgress(20, 'Reading image…');
+    const img = await loadImageEl(file);
+    const wIn = img.naturalWidth/96, hIn = img.naturalHeight/96;
+    const dataUrl = await blobToDataURL(file);
+    onProgress(55, 'Building slide…');
+    const pptx = new PptxGenJS();
+    pptx.defineLayout({ name:'Custom', width: wIn, height: hIn });
+    pptx.layout = 'Custom';
+    const slide = pptx.addSlide();
+    slide.addImage({ data: dataUrl, x:0, y:0, w: wIn, h: hIn });
+    onProgress(85, 'Packaging .pptx…');
+    const blob = await pptx.write({ outputType:'blob' });
+    return { blob, ext:'pptx', mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  }
+  function blobToDataURL(blob){
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // ---------- PDF conversions ----------
+  async function loadPdf(file){
+    const buf = await file.arrayBuffer();
+    return pdfjsLib.getDocument({ data: buf }).promise;
+  }
+  async function pdfToImages(file){
+    onProgress(5, 'Opening PDF…');
+    const pdf = await loadPdf(file);
+    const blobs = [];
+    for (let i=1; i<=pdf.numPages; i++){
+      onProgress(5 + (i/pdf.numPages)*80, 'Rendering page ' + i + ' of ' + pdf.numPages + '…');
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      blobs.push(await canvasToBlob(canvas, 'image/png'));
+    }
+    if (blobs.length === 1) return { blob: blobs[0], ext:'png', mime:'image/png' };
+    onProgress(90, 'Zipping ' + blobs.length + ' images…');
+    const zip = new JSZip();
+    blobs.forEach((b,i) => zip.file('page-' + (i+1) + '.png', b));
+    const blob = await zip.generateAsync({ type:'blob' });
+    return { blob, ext:'zip', mime:'application/zip' };
+  }
+  async function pdfToText(file){
+    onProgress(5, 'Opening PDF…');
+    const pdf = await loadPdf(file);
+    let text = '';
+    for (let i=1; i<=pdf.numPages; i++){
+      onProgress(5 + (i/pdf.numPages)*85, 'Reading page ' + i + ' of ' + pdf.numPages + '…');
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it => it.str).join(' ') + '\n\n';
+    }
+    return { blob: new Blob([text], {type:'text/plain'}), ext:'txt', mime:'text/plain' };
+  }
+  async function pdfToPptx(file){
+    onProgress(5, 'Opening PDF…');
+    const pdf = await loadPdf(file);
+    const firstPage = await pdf.getPage(1);
+    const view = firstPage.view; // [x0,y0,x1,y1] in pt
+    const wIn = (view[2]-view[0]) / 72;
+    const hIn = (view[3]-view[1]) / 72;
+    const pptx = new PptxGenJS();
+    pptx.defineLayout({ name:'Custom', width: wIn, height: hIn });
+    pptx.layout = 'Custom';
+    for (let i=1; i<=pdf.numPages; i++){
+      onProgress(5 + (i/pdf.numPages)*80, 'Rendering page ' + i + ' of ' + pdf.numPages + '…');
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      const slide = pptx.addSlide();
+      slide.addImage({ data: dataUrl, x:0, y:0, w: wIn, h: hIn });
+    }
+    onProgress(90, 'Packaging .pptx…');
+    const blob = await pptx.write({ outputType:'blob' });
+    return { blob, ext:'pptx', mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  }
+
+  // ---------- PPTX conversions (best-effort layout rendering) ----------
+  async function readPptxSlides(file){
+    const zip = await JSZip.loadAsync(file);
+    const presFile = zip.file('ppt/presentation.xml');
+    if (!presFile) throw new Error('This doesn\'t look like a valid PowerPoint file.');
+    const presXml = await presFile.async('text');
+    const presDoc = new DOMParser().parseFromString(presXml, 'application/xml');
+    const sldSzEl = presDoc.getElementsByTagName('p:sldSz')[0];
+    const cx = sldSzEl ? parseInt(sldSzEl.getAttribute('cx')) : 12192000;
+    const cy = sldSzEl ? parseInt(sldSzEl.getAttribute('cy')) : 6858000;
+    const pageW = cx / EMU_PER_PT, pageH = cy / EMU_PER_PT;
+
+    const slideFiles = Object.keys(zip.files)
+      .filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+      .sort((a,b) => parseInt(a.match(/slide(\d+)\.xml/)[1]) - parseInt(b.match(/slide(\d+)\.xml/)[1]));
+    if (!slideFiles.length) throw new Error('No slides were found in this file.');
+
+    return { zip, pageW, pageH, slideFiles };
+  }
+
+  async function renderSlideToCanvas(zip, slidePath, pageW, pageH){
+    const slideName = slidePath.split('/').pop();
+    const relsPath = 'ppt/slides/_rels/' + slideName + '.rels';
+    let relMap = {};
+    const relsFile = zip.file(relsPath);
+    if (relsFile){
+      const relsXml = await relsFile.async('text');
+      const relsDoc = new DOMParser().parseFromString(relsXml, 'application/xml');
+      Array.from(relsDoc.getElementsByTagName('Relationship')).forEach(r => {
+        relMap[r.getAttribute('Id')] = r.getAttribute('Target');
+      });
+    }
+    const slideXml = await zip.file(slidePath).async('text');
+    const slideDoc = new DOMParser().parseFromString(slideXml, 'application/xml');
+
+    const scale = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(pageW * scale);
+    canvas.height = Math.round(pageH * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const spTree = slideDoc.getElementsByTagName('p:spTree')[0];
+    const children = spTree ? Array.from(spTree.childNodes).filter(n => n.nodeType === 1) : [];
+
+    for (const node of children){
+      const tag = node.tagName;
+      try {
+        if (tag === 'p:pic'){
+          const blip = node.getElementsByTagName('a:blip')[0];
+          const off = node.getElementsByTagName('a:off')[0];
+          const ext = node.getElementsByTagName('a:ext')[0];
+          if (blip && off && ext){
+            const embedId = blip.getAttribute('r:embed');
+            const target = relMap[embedId];
+            if (target){
+              const mediaPath = 'ppt/' + target.replace(/^\.\.\//,'');
+              const mediaFile = zip.file(mediaPath);
+              if (mediaFile){
+                const mBlob = await mediaFile.async('blob');
+                const img = await loadImageEl(mBlob);
+                const x = parseInt(off.getAttribute('x'))/EMU_PER_PT*scale;
+                const y = parseInt(off.getAttribute('y'))/EMU_PER_PT*scale;
+                const w = parseInt(ext.getAttribute('cx'))/EMU_PER_PT*scale;
+                const h = parseInt(ext.getAttribute('cy'))/EMU_PER_PT*scale;
+                ctx.drawImage(img, x, y, w, h);
+              }
+            }
+          }
+        } else if (tag === 'p:sp'){
+          const off = node.getElementsByTagName('a:off')[0];
+          const ext = node.getElementsByTagName('a:ext')[0];
+          const txBody = node.getElementsByTagName('p:txBody')[0];
+          if (txBody){
+            let x = 10*scale, y = 10*scale, w = canvas.width - 20*scale;
+            if (off && ext){
+              x = parseInt(off.getAttribute('x'))/EMU_PER_PT*scale;
+              y = parseInt(off.getAttribute('y'))/EMU_PER_PT*scale;
+              w = parseInt(ext.getAttribute('cx'))/EMU_PER_PT*scale;
+            }
+            let cursorY = y + 20*scale;
+            const paragraphs = Array.from(txBody.getElementsByTagName('a:p'));
+            paragraphs.forEach(p => {
+              const runs = Array.from(p.getElementsByTagName('a:r'));
+              const text = runs.map(r => {
+                const t = r.getElementsByTagName('a:t')[0];
+                return t ? t.textContent : '';
+              }).join('');
+              let fontSize = 18;
+              const rPr = p.getElementsByTagName('a:rPr')[0];
+              if (rPr && rPr.getAttribute('sz')) fontSize = parseInt(rPr.getAttribute('sz'))/100;
+              if (text.trim()){
+                ctx.fillStyle = '#1a2233';
+                ctx.font = Math.round(fontSize*scale) + 'px Arial';
+                const words = text.split(' ');
+                const maxWidth = w - 10*scale;
+                let line = '';
+                words.forEach(word => {
+                  const test = line + word + ' ';
+                  if (ctx.measureText(test).width > maxWidth && line){
+                    ctx.fillText(line, x + 5*scale, cursorY);
+                    cursorY += fontSize*scale*1.3;
+                    line = word + ' ';
+                  } else line = test;
+                });
+                if (line.trim()){ ctx.fillText(line, x + 5*scale, cursorY); cursorY += fontSize*scale*1.3; }
+              } else {
+                cursorY += fontSize*scale*1.1;
+              }
+            });
+          }
+        }
+      } catch(shapeErr){ /* skip any shape we can't render, keep going */ }
+    }
+    return canvas;
+  }
+
+  async function pptxToPdf(file){
+    onProgress(5, 'Reading PowerPoint…');
+    const { zip, pageW, pageH, slideFiles } = await readPptxSlides(file);
+    const { jsPDF } = window.jspdf;
+    const orientation = pageW >= pageH ? 'l' : 'p';
+    const doc = new jsPDF({ orientation, unit:'pt', format:[pageW, pageH] });
+    for (let i=0; i<slideFiles.length; i++){
+      onProgress(5 + (i/slideFiles.length)*85, 'Rendering slide ' + (i+1) + ' of ' + slideFiles.length + '…');
+      const canvas = await renderSlideToCanvas(zip, slideFiles[i], pageW, pageH);
+      const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      if (i > 0) doc.addPage([pageW, pageH], orientation);
+      doc.addImage(imgData, 'JPEG', 0, 0, pageW, pageH);
+    }
+    onProgress(95, 'Finalizing PDF…');
+    return { blob: doc.output('blob'), ext:'pdf', mime:'application/pdf' };
+  }
+  async function pptxToImages(file){
+    onProgress(5, 'Reading PowerPoint…');
+    const { zip, pageW, pageH, slideFiles } = await readPptxSlides(file);
+    const blobs = [];
+    for (let i=0; i<slideFiles.length; i++){
+      onProgress(5 + (i/slideFiles.length)*80, 'Rendering slide ' + (i+1) + ' of ' + slideFiles.length + '…');
+      const canvas = await renderSlideToCanvas(zip, slideFiles[i], pageW, pageH);
+      blobs.push(await canvasToBlob(canvas, 'image/png'));
+    }
+    if (blobs.length === 1) return { blob: blobs[0], ext:'png', mime:'image/png' };
+    onProgress(90, 'Zipping ' + blobs.length + ' images…');
+    const zipOut = new JSZip();
+    blobs.forEach((b,i) => zipOut.file('slide-' + (i+1) + '.png', b));
+    const blob = await zipOut.generateAsync({ type:'blob' });
+    return { blob, ext:'zip', mime:'application/zip' };
+  }
+
+  // ---------- DOCX conversions ----------
+  async function docxToText(file){
+    onProgress(20, 'Reading Word document…');
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    onProgress(80, 'Extracting text…');
+    return { blob: new Blob([result.value], {type:'text/plain'}), ext:'txt', mime:'text/plain' };
+  }
+  async function docxToPdf(file){
+    onProgress(10, 'Reading Word document…');
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await mammoth.convertToHtml({ arrayBuffer });
+    onProgress(30, 'Laying out content…');
+
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed; left:-9999px; top:0; width:800px; padding:48px; background:#fff; font-family:Georgia,serif; font-size:16px; line-height:1.6; color:#111;';
+    container.innerHTML = result.value;
+    document.body.appendChild(container);
+
+    const imgs = Array.from(container.querySelectorAll('img'));
+    await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => { img.onload = res; img.onerror = res; })));
+
+    onProgress(55, 'Rendering pages…');
+    const canvas = await html2canvas(container, { scale: 2, useCORS: true });
+    document.body.removeChild(container);
+
+    const pageWidthPt = 612, pageHeightPt = 792; // US Letter
+    const ptPerContainerPx = pageWidthPt / 800;
+    const sliceHeightCanvasPx = Math.round((pageHeightPt / ptPerContainerPx) * (canvas.width/800));
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'pt', format:[pageWidthPt, pageHeightPt] });
+    let y = 0, pageIndex = 0;
+    const totalPages = Math.max(1, Math.ceil(canvas.height / sliceHeightCanvasPx));
+    while (y < canvas.height){
+      onProgress(55 + (pageIndex/totalPages)*35, 'Composing page ' + (pageIndex+1) + ' of ' + totalPages + '…');
+      const sliceH = Math.min(sliceHeightCanvasPx, canvas.height - y);
+      const sliceCanvas = document.createElement('canvas');
+      sliceCanvas.width = canvas.width;
+      sliceCanvas.height = sliceHeightCanvasPx;
+      const sctx = sliceCanvas.getContext('2d');
+      sctx.fillStyle = '#fff';
+      sctx.fillRect(0,0,sliceCanvas.width, sliceCanvas.height);
+      sctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+      const dataUrl = sliceCanvas.toDataURL('image/jpeg', 0.92);
+      if (pageIndex > 0) doc.addPage([pageWidthPt, pageHeightPt]);
+      doc.addImage(dataUrl, 'JPEG', 0, 0, pageWidthPt, pageHeightPt);
+      y += sliceHeightCanvasPx;
+      pageIndex++;
+    }
+    onProgress(95, 'Finalizing PDF…');
+    return { blob: doc.output('blob'), ext:'pdf', mime:'application/pdf' };
+  }
+
+  // ---------- Plain text conversions ----------
+  async function textToPdf(file){
+    onProgress(20, 'Reading text…');
+    const text = await file.text();
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'pt', format:'a4' });
+    const marginX = 44, marginY = 54;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.setFont('Courier'); doc.setFontSize(10.5);
+    const lines = doc.splitTextToSize(text, pageWidth - marginX*2);
+    let y = marginY;
+    const lineHeight = 13.5;
+    onProgress(60, 'Laying out ' + lines.length + ' lines…');
+    lines.forEach(line => {
+      if (y > pageHeight - marginY){ doc.addPage(); y = marginY; }
+      doc.text(line, marginX, y);
+      y += lineHeight;
+    });
+    onProgress(95, 'Finalizing PDF…');
+    return { blob: doc.output('blob'), ext:'pdf', mime:'application/pdf' };
+  }
+
+  // ---------- Dispatcher ----------
+  async function convertFile(file, category, target){
+    if (category === 'image'){
+      if (target.id === 'pdf') return imageToPdf(file);
+      if (target.id === 'pptx') return imageToPptx(file);
+      return imageToImage(file, target.ext);
+    }
+    if (category === 'pdf'){
+      if (target.id === 'pptx') return pdfToPptx(file);
+      if (target.id === 'png') return pdfToImages(file);
+      if (target.id === 'txt') return pdfToText(file);
+    }
+    if (category === 'pptx'){
+      if (target.id === 'pdf') return pptxToPdf(file);
+      if (target.id === 'png') return pptxToImages(file);
+    }
+    if (category === 'docx'){
+      if (target.id === 'pdf') return docxToPdf(file);
+      if (target.id === 'txt') return docxToText(file);
+    }
+    if (category === 'text'){
+      if (target.id === 'pdf') return textToPdf(file);
+    }
+    throw new Error('That conversion isn\'t supported yet.');
+  }
+
+  // ---------- Run ----------
+  let outputBlob = null, outputFileName = '', outputMime = '';
+
+  async function runConversion(){
+    cancelRequested = false;
+    logEl.innerHTML = '';
+    updateProgress(0);
+    foundEl.textContent = '';
+    scanSub.textContent = 'Reading file…';
+    showScreen(procScreen);
+
+    try {
+      const result = await convertFile(currentFile, currentCategory, selectedTarget);
+      if (cancelRequested) return;
+      outputBlob = result.blob;
+      outputMime = result.mime;
+      outputFileName = baseName(currentFile.name) + '.' + result.ext;
+
+      document.getElementById('result-icon').textContent = result.ext.toUpperCase().slice(0,4);
+      document.getElementById('file-name').textContent = outputFileName;
+      document.getElementById('file-meta-text').textContent = fmtBytes(outputBlob.size);
+      document.getElementById('result-sub').textContent = 'Ready to download';
+
+      const shareBtn = document.getElementById('share-btn');
+      const testFile = new File([outputBlob], outputFileName, { type: outputMime });
+      if (navigator.canShare && navigator.canShare({ files:[testFile] })){
+        shareBtn.style.display = 'flex';
+      } else {
+        shareBtn.style.display = 'none';
+      }
+
+      updateProgress(100);
+      showScreen(resultScreen);
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    } catch(err){
+      console.error(err);
+      showScreen(homeScreen);
+      showError((err && err.message) ? err.message : 'Conversion failed — try a different file or format.');
+    }
+  }
+
+  // ---------- Robust download (works inside Telegram's in-app browser too) ----------
+  // Telegram's WebView on iOS/Android can silently swallow blob: URL downloads,
+  // so we convert to a base64 data: URL first — that triggers a real save/share
+  // prompt far more reliably across desktop, Android and iOS.
+  function triggerDataUrlDownload(dataUrl, filename){
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  document.getElementById('download-btn').addEventListener('click', async () => {
+    if (!outputBlob) return;
+    try {
+      const dataUrl = await blobToDataURL(outputBlob);
+      triggerDataUrlDownload(dataUrl, outputFileName);
+    } catch(e){
+      // Fallback to a plain object URL if base64 conversion fails for a huge file
+      const url = URL.createObjectURL(outputBlob);
+      triggerDataUrlDownload(url, outputFileName);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+  });
+
+  document.getElementById('open-btn').addEventListener('click', async () => {
+    if (!outputBlob) return;
+    try {
+      const dataUrl = await blobToDataURL(outputBlob);
+      const win = window.open();
+      if (win) { win.location.href = dataUrl; }
+      else { triggerDataUrlDownload(dataUrl, outputFileName); }
+    } catch(e){
+      const url = URL.createObjectURL(outputBlob);
+      window.open(url, '_blank');
+    }
+  });
+
+  document.getElementById('share-btn').addEventListener('click', async () => {
+    if (!outputBlob) return;
+    try {
+      const file = new File([outputBlob], outputFileName, { type: outputMime });
+      await navigator.share({ files:[file], title: outputFileName });
+    } catch(e){ /* user cancelled or unsupported — Download/Open remain as fallback */ }
+  });
+
+  document.getElementById('new-btn').addEventListener('click', () => {
+    resetFile();
+    showScreen(homeScreen);
+  });
+
+  convertBtn.addEventListener('click', () => {
+    if (convertBtn.disabled || !currentFile || !selectedTarget) return;
+    runConversion();
+  });
+
+  document.getElementById('cancel-btn').addEventListener('click', () => {
+    cancelRequested = true;
+    showScreen(homeScreen);
+  });
+</script>
+</body>
+</html>
