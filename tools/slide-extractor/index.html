@@ -331,7 +331,8 @@
   let excludeFrac = null; // {x,y,w,h} as 0..1 fractions of frame
   let sensitivity = 'normal';
   let cancelRequested = false;
-  let capturedSlides = []; // { dataURL, w, h, t }
+  let capturedSlides = []; // { dataURL, w, h, t, diffSnap }
+  let lastMergedCount = 0; // how many progressive-build duplicates were merged on the last run
 
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('file-input');
@@ -628,9 +629,90 @@
   const MIN_GAP_SEC = 1.0;              // don't capture two slides closer together than this
   const FALLBACK_FIRST_CAPTURE_SEC = 4; // guarantee an opening slide even on constantly-noisy video
 
+  // ---------- Post-scan dedup: tell a "build-up" from a real new slide ----------
+  // Presenters often reveal a slide piece by piece — a bullet, then an image,
+  // then another image — with each reveal settling long enough to get
+  // captured as its own "slide" by the loop above. We only want to keep the
+  // final, most-complete version of each of those. But if content is instead
+  // SWAPPED (a picture replaced with a different one, text edited while the
+  // rest holds still), that's a genuinely different slide and both must be
+  // kept. The difference: a build-up only ever adds detail into space that
+  // was previously blank; a swap overwrites space that already had content.
+  const BLANK_VARIANCE_THRESH = 55; // grayscale variance below this ≈ "essentially empty" block
+  const REPLACE_TOLERANCE = 0.12;   // fraction of changed blocks allowed to look swapped
+                                     // before two captures count as different slides
+
+  function buildRelation(aSnap, bSnap, excludeRect){
+    const blockW = DIFF_W / GRID_COLS, blockH = DIFF_H / GRID_ROWS;
+    const exX0 = excludeRect ? excludeRect.x * DIFF_W : -1;
+    const exY0 = excludeRect ? excludeRect.y * DIFF_H : -1;
+    const exX1 = excludeRect ? (excludeRect.x + excludeRect.w) * DIFF_W : -1;
+    const exY1 = excludeRect ? (excludeRect.y + excludeRect.h) * DIFF_H : -1;
+
+    let countedBlocks = 0, changedBlocks = 0, replacementBlocks = 0;
+    for (let gy = 0; gy < GRID_ROWS; gy++){
+      const by0 = Math.floor(gy * blockH), by1 = Math.floor((gy + 1) * blockH);
+      for (let gx = 0; gx < GRID_COLS; gx++){
+        const bx0 = Math.floor(gx * blockW), bx1 = Math.floor((gx + 1) * blockW);
+        const cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
+        if (excludeRect && cx >= exX0 && cx < exX1 && cy >= exY0 && cy < exY1) continue;
+
+        let sumDiff = 0, sumA = 0, sumSqA = 0, n = 0;
+        for (let y = by0; y < by1; y += 2){
+          for (let x = bx0; x < bx1; x += 2){
+            const i = (y * DIFF_W + x) * 4;
+            const ga = (aSnap[i] + aSnap[i+1] + aSnap[i+2]) / 3;
+            const gb = (bSnap[i] + bSnap[i+1] + bSnap[i+2]) / 3;
+            sumDiff += Math.abs(ga - gb);
+            sumA += ga; sumSqA += ga * ga;
+            n++;
+          }
+        }
+        countedBlocks++;
+        if (!n) continue;
+        if ((sumDiff / n) <= BLOCK_ACTIVE_THRESH) continue; // block didn't change
+
+        changedBlocks++;
+        const meanA = sumA / n;
+        const varA = (sumSqA / n) - (meanA * meanA);
+        if (varA >= BLANK_VARIANCE_THRESH){
+          // This block already showed real content in A, and now looks
+          // different in B — a swap, not an addition into empty space.
+          replacementBlocks++;
+        }
+      }
+    }
+
+    const changeFrac = countedBlocks ? changedBlocks / countedBlocks : 0;
+    const replaceFrac = changedBlocks ? replacementBlocks / changedBlocks : 0;
+    return { changeFrac, additive: changeFrac > 0 && replaceFrac <= REPLACE_TOLERANCE };
+  }
+
+  // Collapses chains of progressive-build captures down to just the final,
+  // most-complete frame of each real slide. Runs greedily forward in time:
+  // as long as each next capture is a pure addition over the current one,
+  // it supersedes it; the moment a capture looks like a swap instead, it
+  // starts a new chain (i.e. is treated as a genuinely different slide).
+  function dedupeBuilds(slides, excludeRect){
+    if (slides.length <= 1) return slides;
+    const kept = [];
+    let i = 0;
+    while (i < slides.length){
+      let j = i;
+      while (j + 1 < slides.length){
+        const rel = buildRelation(slides[j].diffSnap, slides[j+1].diffSnap, excludeRect);
+        if (rel.additive) j++; else break;
+      }
+      kept.push(slides[j]);
+      i = j + 1;
+    }
+    return kept;
+  }
+
   async function runExtraction(){
     cancelRequested = false;
     capturedSlides = [];
+    lastMergedCount = 0;
     logEl.innerHTML = '';
     ruleMarksEl.innerHTML = '';
     updateProgress(0);
@@ -645,10 +727,10 @@
     captureCanvas.width = targetW;
     captureCanvas.height = targetH;
 
-    function captureSlideAt(time){
+    function captureSlideAt(time, diffSnap){
       captureCtx.drawImage(videoEl, 0, 0, targetW, targetH);
       const dataURL = captureCanvas.toDataURL('image/jpeg', 0.86);
-      capturedSlides.push({ dataURL, w: targetW, h: targetH, t: time });
+      capturedSlides.push({ dataURL, w: targetW, h: targetH, t: time, diffSnap });
       addMark((time / duration) * 100);
       addLogLine(time, capturedSlides.length);
       foundEl.textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' found';
@@ -693,7 +775,7 @@
       const forceFirstCapture = baselineData === null && t >= FALLBACK_FIRST_CAPTURE_SEC;
 
       if (pendingCandidate && (stableEnough || forceFirstCapture) && (t - lastCaptureT) >= MIN_GAP_SEC){
-        captureSlideAt(t);
+        captureSlideAt(t, diffData);
         baselineData = diffData;
         lastCaptureT = t;
         pendingCandidate = false;
@@ -717,18 +799,28 @@
     const finalDiffData = grabDiffFrame();
     const finalChangeFrac = baselineData ? blockChangeFraction(baselineData, finalDiffData, excludeFrac) : Infinity;
     if ((baselineData === null || finalChangeFrac >= preset.changeFrac * 0.6) && (duration - lastCaptureT) >= 0.3){
-      captureSlideAt(duration);
+      captureSlideAt(duration, finalDiffData);
     }
-
-    scanSub.textContent = 'Compiling PDF…';
-    updateProgress(100);
-    await new Promise(r => setTimeout(r, 250));
 
     if (capturedSlides.length === 0){
       showScreen(homeScreen);
       showError('No slide changes were detected. Try "Catch more slides" sensitivity, or check the video actually contains still slides.');
       return;
     }
+
+    // Smart cleanup: collapse "slide built up piece by piece" chains (bullets
+    // or images added one at a time) down to just their final, complete
+    // frame — while leaving genuinely different slides (swapped text/images)
+    // untouched as separate pages.
+    scanSub.textContent = 'Comparing slides for duplicates…';
+    await new Promise(r => setTimeout(r, 0));
+    const rawCount = capturedSlides.length;
+    capturedSlides = dedupeBuilds(capturedSlides, excludeFrac);
+    lastMergedCount = rawCount - capturedSlides.length;
+
+    scanSub.textContent = 'Compiling PDF…';
+    updateProgress(100);
+    await new Promise(r => setTimeout(r, 250));
 
     await buildPDF();
     showScreen(resultScreen);
@@ -737,6 +829,8 @@
 
   // ---------- PDF assembly (jsPDF, fully client-side) ----------
   let pdfBlob = null;
+  let pdfDataURL = null; // data: URI form — far more reliably honoured than a blob: URL
+                          // inside embedded/in-app browsers like Telegram's own WebView
   let pdfFileName = 'Slides.pdf';
 
   async function buildPDF(){
@@ -756,8 +850,12 @@
     const safeName = baseName.replace(/[^a-z0-9\-_ ]/gi, '').trim().replace(/\s+/g,'_') || 'lecture';
     pdfFileName = safeName + '_slides.pdf';
     pdfBlob = doc.output('blob');
+    pdfDataURL = doc.output('datauristring');
 
     document.getElementById('result-count').textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' captured';
+    document.querySelector('.result-head span').textContent = lastMergedCount > 0
+      ? (lastMergedCount + ' build-up duplicate' + (lastMergedCount===1?'':'s') + ' merged automatically')
+      : 'Nothing skipped, duplicates removed';
     document.getElementById('file-name').textContent = pdfFileName;
     document.getElementById('file-meta-text').textContent = capturedSlides.length + ' pages · ' + fmtBytes(pdfBlob.size);
 
@@ -771,34 +869,60 @@
       grid.appendChild(d);
     });
 
-    // Show the native Share option only if the browser can actually share a file.
+    // Show "Share to chat" whenever the browser exposes navigator.share at
+    // all. Some embedded WebViews (including Telegram's) support share()
+    // without correctly implementing canShare(), so gating on canShare alone
+    // was hiding a button that actually works. The click handler below
+    // still checks canShare when available, and otherwise just attempts
+    // it and falls back gracefully if the browser rejects the file.
     const shareBtn = document.getElementById('share-btn');
-    const testFile = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
-    if (navigator.canShare && navigator.canShare({ files:[testFile] })){
-      shareBtn.style.display = 'flex';
-    } else {
-      shareBtn.style.display = 'none';
+    shareBtn.style.display = (typeof navigator.share === 'function') ? 'flex' : 'none';
+  }
+
+  // Downloading inside embedded/in-app browsers (Telegram's WebView chief
+  // among them) is where things go quiet: a blob: URL + anchor "download"
+  // attribute is frequently just ignored there, with no error thrown. A
+  // data: URI is honoured far more consistently. Inside Telegram specifically
+  // we skip the anchor trick altogether and open the PDF directly — that
+  // lands in the phone's native PDF viewer, which has its own Save/Share
+  // controls in its toolbar.
+  function downloadPDF(){
+    if (!pdfDataURL) return;
+    if (tg){
+      window.open(pdfDataURL, '_blank');
+      return;
+    }
+    try {
+      const a = document.createElement('a');
+      a.href = pdfDataURL;
+      a.download = pdfFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch(e){
+      window.open(pdfDataURL, '_blank');
     }
   }
 
   document.getElementById('download-btn').addEventListener('click', () => {
     if (!pdfBlob) return;
-    const url = URL.createObjectURL(pdfBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = pdfFileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    downloadPDF();
   });
 
   document.getElementById('share-btn').addEventListener('click', async () => {
     if (!pdfBlob) return;
     try{
       const file = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
+      if (navigator.canShare && !navigator.canShare({ files:[file] })){
+        throw new Error('file-share-unsupported');
+      }
       await navigator.share({ files: [file], title: pdfFileName });
-    } catch(e){ /* user cancelled or unsupported — download button remains as fallback */ }
+    } catch(e){
+      // AbortError just means the user backed out of the share sheet —
+      // respect that. Anything else means this browser couldn't actually
+      // share the file despite exposing share(), so fall back to opening it.
+      if (!e || e.name !== 'AbortError') downloadPDF();
+    }
   });
 
   document.getElementById('new-btn').addEventListener('click', () => {
