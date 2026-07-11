@@ -586,9 +586,17 @@
     return count ? sum / count : 0;
   }
 
-  const THRESHOLDS = { fine: 8, normal: 14, coarse: 22 };
-  const MIN_GAP_SEC = 0.6;   // don't capture two slides closer together than this
-  const SAMPLE_STEP = 0.5;   // seconds between sampled frames
+  // Each preset controls: how big a change must be to count as "a new slide is
+  // forming" (change), how small frame-to-frame motion must be to count as
+  // "holding still" (still), how long it must hold still before we trust it's
+  // done animating (stableSec), and how often we sample (sampleStep).
+  const SENSITIVITY_PRESETS = {
+    fine:   { change: 7,  still: 3, stableSec: 0.5, sampleStep: 0.25 },
+    normal: { change: 12, still: 4, stableSec: 0.7, sampleStep: 0.35 },
+    coarse: { change: 18, still: 5, stableSec: 0.9, sampleStep: 0.5  }
+  };
+  const MIN_GAP_SEC = 1.0;              // don't capture two slides closer together than this
+  const FALLBACK_FIRST_CAPTURE_SEC = 4; // guarantee an opening slide even on constantly-noisy video
 
   async function runExtraction(){
     cancelRequested = false;
@@ -601,48 +609,87 @@
     showScreen(procScreen);
 
     const duration = videoEl.duration;
-    const threshold = THRESHOLDS[sensitivity] || THRESHOLDS.normal;
+    const preset = SENSITIVITY_PRESETS[sensitivity] || SENSITIVITY_PRESETS.normal;
     const targetW = Math.min(1280, videoEl.videoWidth || 1280);
     const targetH = Math.round((videoEl.videoHeight || 720) * (targetW / (videoEl.videoWidth || 1280)));
     captureCanvas.width = targetW;
     captureCanvas.height = targetH;
 
-    let prevDiffData = null;
+    function captureSlideAt(time){
+      captureCtx.drawImage(videoEl, 0, 0, targetW, targetH);
+      const dataURL = captureCanvas.toDataURL('image/jpeg', 0.86);
+      capturedSlides.push({ dataURL, w: targetW, h: targetH, t: time });
+      addMark((time / duration) * 100);
+      addLogLine(time, capturedSlides.length);
+      foundEl.textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' found';
+    }
+
+    // State for the "wait until it stops moving" detector. A slide is only
+    // captured once the picture has been essentially unchanged for
+    // `stableSec` seconds, so mid-transition / mid-animation frames never
+    // get grabbed — we always land on the finished, fully-built slide.
+    let baselineData = null;      // low-res frame data of the last CAPTURED slide
+    let prevSampleData = null;    // low-res frame data of the previous sample
+    let stillStreakStart = null;  // timestamp when the current stillness streak began
+    let pendingCandidate = true;  // is a not-yet-captured slide currently forming?
     let lastCaptureT = -999;
     let t = 0;
 
-    // Always try to capture the very first frame as slide 1.
     while (t <= duration){
       if (cancelRequested) return;
       await seekTo(t);
       const diffData = grabDiffFrame();
-      let isChange = false;
-      if (prevDiffData === null){
-        isChange = true; // first sampled frame
+
+      if (prevSampleData === null){
+        stillStreakStart = t; // nothing to compare yet — treat as the start of a hold
       } else {
-        const d = frameDiff(prevDiffData, diffData, excludeFrac);
-        if (d >= threshold && (t - lastCaptureT) >= MIN_GAP_SEC) isChange = true;
+        const motion = frameDiff(prevSampleData, diffData, excludeFrac);
+        if (motion < preset.still){
+          if (stillStreakStart === null) stillStreakStart = t;
+        } else {
+          stillStreakStart = null; // still animating/transitioning — keep waiting
+        }
       }
 
-      if (isChange){
-        captureCtx.drawImage(videoEl, 0, 0, targetW, targetH);
-        const dataURL = captureCanvas.toDataURL('image/jpeg', 0.86);
-        capturedSlides.push({ dataURL, w: targetW, h: targetH, t });
+      if (!pendingCandidate && baselineData !== null){
+        const diffFromBaseline = frameDiff(baselineData, diffData, excludeFrac);
+        if (diffFromBaseline >= preset.change){
+          pendingCandidate = true;
+          scanSub.textContent = 'Change detected — waiting for it to settle…';
+        }
+      }
+
+      const stableEnough = stillStreakStart !== null && (t - stillStreakStart) >= preset.stableSec;
+      const forceFirstCapture = baselineData === null && t >= FALLBACK_FIRST_CAPTURE_SEC;
+
+      if (pendingCandidate && (stableEnough || forceFirstCapture) && (t - lastCaptureT) >= MIN_GAP_SEC){
+        captureSlideAt(t);
+        baselineData = diffData;
         lastCaptureT = t;
-        const pctNow = (t / duration) * 100;
-        addMark(pctNow);
-        addLogLine(t, capturedSlides.length);
-        foundEl.textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' found';
+        pendingCandidate = false;
+        scanSub.textContent = 'Scanning for slide changes…';
       }
 
-      prevDiffData = diffData;
+      prevSampleData = diffData;
       updateProgress(Math.min(99, (t / duration) * 100));
-      t += SAMPLE_STEP;
+      t += preset.sampleStep;
       // yield to the UI thread so the progress bar actually paints
       await new Promise(r => setTimeout(r, 0));
     }
 
     if (cancelRequested) return;
+
+    // The video may end mid-animation, or never quite cross the "still" bar
+    // before cutting off — check the true final frame so the last slide
+    // isn't lost or captured half-built.
+    scanSub.textContent = 'Checking final frame…';
+    await seekTo(duration);
+    const finalDiffData = grabDiffFrame();
+    const finalDiffFromBaseline = baselineData ? frameDiff(baselineData, finalDiffData, excludeFrac) : Infinity;
+    if ((baselineData === null || finalDiffFromBaseline >= preset.change * 0.6) && (duration - lastCaptureT) >= 0.3){
+      captureSlideAt(duration);
+    }
+
     scanSub.textContent = 'Compiling PDF…';
     updateProgress(100);
     await new Promise(r => setTimeout(r, 250));
