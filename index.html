@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fanar Tools</title>
+<link rel="icon" href="assets/logo.png">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy-deep:#0B2340;
+    --navy:#12365C;
+    --blue:#2E6FB0;
+    --blue-soft:#DCEAF7;
+    --gold:#F0A93E;
+    --gold-soft:#FCE3B2;
+    --paper:#F6FAFD;
+    --ink:#10233B;
+    --ink-mute:#5C7690;
+    --line:#E1EBF4;
+    --radius:18px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:'Inter',system-ui,sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+  .app{
+    max-width:430px;
+    margin:0 auto;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    background:var(--paper);
+  }
+  .topbar{
+    display:flex; align-items:center; gap:9px;
+    padding:calc(env(safe-area-inset-top,0px) + 16px) 20px 14px;
+  }
+  .topbar .mark{width:28px; height:28px; flex-shrink:0; border-radius:50%; object-fit:cover; box-shadow:0 2px 6px -2px rgba(11,35,64,0.4);}
+  .topbar .word{
+    font-family:'Space Grotesk', sans-serif;
+    font-weight:700; font-size:17px; letter-spacing:0.02em;
+    color:var(--navy-deep);
+  }
+  .topbar .word span{color:var(--blue);}
+
+  main{ flex:1; padding:6px 20px 28px; }
+
+  .hero{ text-align:center; padding:18px 0 10px; }
+  .badge-wrap{
+    position:relative;
+    width:120px; height:120px;
+    margin:0 auto 20px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .beam-sweep{
+    position:absolute; inset:-12px;
+    border-radius:50%;
+    background:conic-gradient(from 0deg,
+      transparent 0deg,
+      rgba(240,169,62,0.0) 40deg,
+      rgba(240,169,62,0.35) 90deg,
+      rgba(240,169,62,0.0) 140deg,
+      transparent 360deg);
+    animation:spin 6s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce){ .beam-sweep{animation:none;} }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .badge-logo{
+    position:relative; z-index:1;
+    width:96px; height:96px; border-radius:50%;
+    box-shadow:0 10px 26px -8px rgba(11,35,64,0.45);
+    object-fit:cover;
+    background:#fff;
+  }
+  h1.title{
+    font-family:'Space Grotesk', sans-serif;
+    font-weight:600; font-size:22px; line-height:1.28;
+    color:var(--navy-deep);
+    margin-bottom:8px;
+  }
+  p.sub{
+    font-size:14px; color:var(--ink-mute); line-height:1.5;
+    max-width:300px; margin:0 auto;
+  }
+
+  .section-label{
+    margin:26px 0 12px; font-size:12.5px; font-weight:600; color:var(--ink-mute);
+    text-transform:uppercase; letter-spacing:0.06em;
+  }
+
+  .tool-list{ display:flex; flex-direction:column; gap:12px; }
+
+  .tool-card{
+    display:flex; align-items:center; gap:14px;
+    background:#fff; border:1.5px solid var(--line); border-radius:var(--radius);
+    padding:16px; text-decoration:none; color:inherit;
+    transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+    cursor:pointer;
+  }
+  .tool-card:active{ transform:scale(0.98); }
+  .tool-card.enabled:hover{ border-color:var(--blue); }
+  .tool-icon{
+    width:44px; height:44px; flex-shrink:0; border-radius:12px;
+    display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(155deg, var(--blue), var(--navy-deep));
+    color:#fff;
+  }
+  .tool-icon svg{ width:22px; height:22px; }
+  .tool-copy{ flex:1; min-width:0; }
+  .tool-copy b{ font-family:'Space Grotesk'; font-size:15px; display:block; margin-bottom:2px; }
+  .tool-copy span{ font-size:12.5px; color:var(--ink-mute); line-height:1.4; }
+  .tool-arrow{ color:var(--ink-mute); flex-shrink:0; }
+
+  .tool-card.disabled{ opacity:0.5; cursor:default; }
+  .tool-card.disabled .tool-icon{ background:var(--blue-soft); color:var(--blue); }
+  .soon-chip{
+    font-family:'IBM Plex Mono'; font-size:10px; color:var(--blue);
+    background:var(--blue-soft); padding:2px 7px; border-radius:6px;
+    margin-left:8px; white-space:nowrap;
+  }
+
+  svg{display:block;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <img class="mark" src="assets/logo.png" alt="Fanar">
+    <div class="word">FANAR <span>· tools</span></div>
+  </div>
+
+  <main>
+    <div class="hero">
+      <div class="badge-wrap">
+        <div class="beam-sweep"></div>
+        <img class="badge-logo" src="assets/logo.png" alt="Fanar">
+      </div>
+      <h1 class="title">Pick a tool to get started</h1>
+      <p class="sub">Everything here runs on your device — nothing you open or upload leaves your phone.</p>
+    </div>
+
+    <div class="section-label">Available now</div>
+    <div class="tool-list" id="tool-list">
+      <!-- Tool cards are rendered by tools.js config below -->
+    </div>
+
+    <div class="section-label">Coming soon</div>
+    <div class="tool-list" id="soon-list"></div>
+  </main>
+
+</div>
+
+<script>
+  const tg = window.Telegram ? window.Telegram.WebApp : null;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    try {
+      tg.setHeaderColor('#0B2340');
+      tg.setBackgroundColor('#F6FAFD');
+    } catch(e) {}
+  }
+
+  // ---------------------------------------------------------------
+  // TOOL REGISTRY
+  // Add a new tool here whenever you drop a new folder under /tools/.
+  // "path" is relative to this file. "icon" is any inline SVG path data.
+  // ---------------------------------------------------------------
+  const TOOLS = [
+    {
+      name: 'Slide Extractor',
+      desc: 'Turn a lecture video into a clean PDF of its slides',
+      path: 'tools/slide-extractor/index.html',
+      enabled: true,
+      icon: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>'
+    },
+    {
+      name: 'More tools soon',
+      desc: 'This menu grows as new tools are added',
+      path: null,
+      enabled: false,
+      icon: '<path d="M12 5v14M5 12h14"/>'
+    }
+  ];
+
+  function cardHTML(tool){
+    const arrow = tool.enabled
+      ? '<svg class="tool-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>'
+      : '<span class="soon-chip">SOON</span>';
+    return `
+      <div class="tool-card ${tool.enabled ? 'enabled' : 'disabled'}" data-path="${tool.path || ''}">
+        <div class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${tool.icon}</svg></div>
+        <div class="tool-copy"><b>${tool.name}</b><span>${tool.desc}</span></div>
+        ${arrow}
+      </div>`;
+  }
+
+  const activeEl = document.getElementById('tool-list');
+  const soonEl = document.getElementById('soon-list');
+  TOOLS.forEach(t => {
+    const target = t.enabled ? activeEl : soonEl;
+    target.insertAdjacentHTML('beforeend', cardHTML(t));
+  });
+
+  document.querySelectorAll('.tool-card.enabled').forEach(card => {
+    card.addEventListener('click', () => {
+      const path = card.getAttribute('data-path');
+      if (path) window.location.href = path;
+    });
+  });
+</script>
+</body>
+</html>

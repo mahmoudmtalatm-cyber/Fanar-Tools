@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fanar — Slide Extractor</title>
+<link rel="icon" href="../../assets/logo.png">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy-deep:#0B2340;
+    --navy:#12365C;
+    --blue:#2E6FB0;
+    --blue-soft:#DCEAF7;
+    --gold:#F0A93E;
+    --gold-soft:#FCE3B2;
+    --paper:#F6FAFD;
+    --ink:#10233B;
+    --ink-mute:#5C7690;
+    --line:#E1EBF4;
+    --radius:18px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:'Inter',system-ui,sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+  .app{
+    max-width:430px; margin:0 auto; min-height:100vh;
+    display:flex; flex-direction:column; background:var(--paper); position:relative;
+  }
+  .topbar{
+    display:flex; align-items:center; gap:9px;
+    padding:calc(env(safe-area-inset-top,0px) + 16px) 20px 14px;
+  }
+  .topbar .back{
+    width:30px; height:30px; border-radius:9px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--ink-mute); background:#fff; border:1.5px solid var(--line); cursor:pointer;
+  }
+  .topbar .mark{width:26px; height:26px; flex-shrink:0; border-radius:50%; object-fit:cover;}
+  .topbar .word{ font-family:'Space Grotesk', sans-serif; font-weight:700; font-size:16px; letter-spacing:0.02em; color:var(--navy-deep);}
+  .topbar .word span{color:var(--blue);}
+
+  .screen{ display:none; flex:1; flex-direction:column; padding:6px 20px 28px; animation:fade .35s ease both; }
+  .screen.active{display:flex;}
+  @keyframes fade{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+
+  .hero{ text-align:center; padding:14px 0 8px; }
+  .badge-wrap{ position:relative; width:120px; height:120px; margin:0 auto 18px; display:flex; align-items:center; justify-content:center; }
+  .beam-sweep{ position:absolute; inset:-12px; border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0deg, rgba(240,169,62,0.0) 40deg, rgba(240,169,62,0.35) 90deg, rgba(240,169,62,0.0) 140deg, transparent 360deg);
+    animation:spin 6s linear infinite; }
+  @media (prefers-reduced-motion: reduce){ .beam-sweep{animation:none;} }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .badge-logo{ position:relative; z-index:1; width:96px; height:96px; border-radius:50%; box-shadow:0 10px 26px -8px rgba(11,35,64,0.45); object-fit:cover; background:#fff; }
+  h1.title{ font-family:'Space Grotesk', sans-serif; font-weight:600; font-size:21px; line-height:1.28; color:var(--navy-deep); margin-bottom:8px; }
+  p.sub{ font-size:14px; color:var(--ink-mute); line-height:1.5; max-width:300px; margin:0 auto; }
+
+  /* Upload dropzone */
+  .dropzone{
+    margin-top:22px; background:#fff; border:1.5px dashed var(--line); border-radius:var(--radius);
+    padding:26px 18px; text-align:center; cursor:pointer; transition:border-color .15s ease, background .15s ease;
+  }
+  .dropzone.drag{ border-color:var(--blue); background:var(--blue-soft); }
+  .dropzone svg{ margin:0 auto 10px; color:var(--blue); }
+  .dropzone b{ display:block; font-size:14.5px; margin-bottom:3px; }
+  .dropzone span{ font-size:12.5px; color:var(--ink-mute); }
+  #file-input{ display:none; }
+
+  .picked-row{
+    margin-top:14px; display:none; align-items:center; gap:12px;
+    background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px 14px;
+  }
+  .picked-row.show{ display:flex; }
+  .picked-icon{ width:34px; height:40px; flex-shrink:0; border-radius:5px; background:linear-gradient(160deg, var(--blue), var(--navy)); display:flex; align-items:center; justify-content:center; color:#fff; font-family:'Space Grotesk'; font-size:9px; font-weight:700; }
+  .picked-meta{ flex:1; min-width:0; }
+  .picked-meta b{ display:block; font-size:13.5px; word-break:break-word; line-height:1.3; }
+  .picked-meta span{ font-size:11.5px; color:var(--ink-mute); }
+  .picked-clear{ color:var(--ink-mute); cursor:pointer; flex-shrink:0; }
+
+  /* Exclude-region preview */
+  .preview-wrap{ margin-top:16px; display:none; }
+  .preview-wrap.show{ display:block; }
+  .preview-label{ font-size:12.5px; color:var(--ink-mute); margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; }
+  .preview-label a{ color:var(--blue); text-decoration:none; font-weight:600; }
+  .preview-box{ position:relative; border-radius:14px; overflow:hidden; border:1.5px solid var(--line); background:#000; touch-action:none; }
+  .preview-box canvas{ display:block; width:100%; height:auto; }
+  .exclude-rect{
+    position:absolute; border:2px solid var(--gold); background:rgba(240,169,62,0.22);
+    display:none; pointer-events:none;
+  }
+
+  .field-row{ margin-top:16px; display:flex; gap:10px; }
+  .chip-toggle{
+    flex:1; text-align:center; padding:11px 8px; border-radius:12px; border:1.5px solid var(--line);
+    background:#fff; font-size:12.5px; font-weight:600; color:var(--ink-mute); cursor:pointer;
+  }
+  .chip-toggle.active{ border-color:var(--blue); color:var(--blue); background:var(--blue-soft); }
+
+  .btn{ width:100%; border:none; border-radius:14px; font-family:'Space Grotesk', sans-serif; font-weight:600; font-size:15.5px; padding:16px 18px; display:flex; align-items:center; justify-content:center; gap:8px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease, opacity .12s ease; }
+  .btn:active{transform:scale(0.98);}
+  .btn-primary{ margin-top:18px; background:linear-gradient(135deg, var(--gold) 0%, #E8983B 100%); color:var(--navy-deep); box-shadow:0 10px 22px -10px rgba(240,169,62,0.75); }
+  .btn-primary:disabled{opacity:0.45; box-shadow:none; cursor:not-allowed;}
+  .btn-ghost{ background:#fff; color:var(--blue); border:1.5px solid var(--line); }
+  .btn-secondary{ background:var(--blue-soft); color:var(--navy); }
+
+  .steps{ margin-top:28px; display:flex; flex-direction:column; gap:16px; }
+  .step{ display:flex; gap:13px; align-items:flex-start; }
+  .step .dot{ width:26px; height:26px; border-radius:50%; flex-shrink:0; background:var(--blue-soft); color:var(--blue); display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono'; font-size:11.5px; font-weight:500; }
+  .step .txt b{display:block; font-size:14px; font-weight:600; color:var(--ink); margin-bottom:1px;}
+  .step .txt span{font-size:12.5px; color:var(--ink-mute); line-height:1.4;}
+
+  /* Processing screen */
+  .scan-panel{ margin-top:22px; background:var(--navy-deep); border-radius:20px; padding:26px 20px 22px; color:#fff; position:relative; overflow:hidden; }
+  .scan-panel::before{ content:''; position:absolute; inset:0; background: radial-gradient(circle at 20% -10%, rgba(46,111,176,0.35), transparent 55%), radial-gradient(circle at 90% 110%, rgba(240,169,62,0.18), transparent 50%); }
+  .scan-title{ position:relative; font-family:'Space Grotesk'; font-weight:600; font-size:15.5px; margin-bottom:2px; }
+  .scan-sub{position:relative; font-size:12.5px; color:#9FB4CC; margin-bottom:20px;}
+  .ruler{ position:relative; height:46px; background:rgba(255,255,255,0.06); border-radius:10px; overflow:hidden; margin-bottom:14px; }
+  .ruler .fill{ position:absolute; top:0; left:0; bottom:0; width:0%; background:linear-gradient(90deg, rgba(240,169,62,0.0), rgba(240,169,62,0.55)); transition:width .25s linear; }
+  .ruler .beam-line{ position:absolute; top:0; bottom:0; left:0%; width:2px; background:var(--gold); box-shadow:0 0 12px 2px rgba(240,169,62,0.9); transition:left .25s linear; }
+  .ruler .marks{ position:absolute; inset:0; display:flex; align-items:center; }
+  .ruler .marks .anchor{ position:absolute; top:8px; bottom:8px; width:2px; background:#5C8FC0; border-radius:2px; opacity:0.9; }
+  .scan-stats{ position:relative; display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px; }
+  .scan-stats .pct{font-family:'Space Grotesk'; font-weight:700; font-size:26px;}
+  .scan-stats .found{font-family:'IBM Plex Mono'; font-size:12.5px; color:var(--gold-soft);}
+  .log{ position:relative; background:rgba(0,0,0,0.22); border-radius:12px; padding:12px 14px; height:112px; overflow:hidden; font-family:'IBM Plex Mono'; font-size:11.5px; line-height:1.9; color:#BFD3E8; }
+  .log div{white-space:nowrap; opacity:0; animation:logIn .3s ease forwards;}
+  .log div span{color:var(--gold);}
+  @keyframes logIn{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+  .cancel-link{ margin-top:18px; text-align:center; font-size:13px; color:var(--ink-mute); text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+
+  /* Result screen */
+  .result-card{ background:#fff; border:1.5px solid var(--line); border-radius:20px; padding:20px; margin-top:14px; }
+  .result-head{ display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  .check{ width:38px; height:38px; border-radius:50%; flex-shrink:0; background:var(--gold-soft); color:#B5762A; display:flex; align-items:center; justify-content:center; }
+  .result-head b{font-family:'Space Grotesk'; font-size:15.5px; display:block;}
+  .result-head span{font-size:12.5px; color:var(--ink-mute);}
+  .file-row{ margin-top:16px; display:flex; align-items:center; gap:12px; background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:12px 14px; }
+  .file-icon{ width:34px; height:40px; flex-shrink:0; border-radius:5px; background:linear-gradient(160deg, var(--blue), var(--navy)); display:flex; align-items:center; justify-content:center; color:#fff; font-family:'Space Grotesk'; font-size:9px; font-weight:700; }
+  .file-meta b{display:block; font-size:13.5px; word-break:break-word; line-height:1.3;}
+  .file-meta span{font-size:11.5px; color:var(--ink-mute);}
+  .grid-label{ margin:22px 0 10px; font-size:12.5px; font-weight:600; color:var(--ink-mute); text-transform:uppercase; letter-spacing:0.06em; }
+  .thumb-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .thumb{ aspect-ratio:4/3; border-radius:9px; position:relative; overflow:hidden; border:1px solid var(--line); background-size:cover; background-position:center; display:flex; align-items:flex-end; padding:6px; }
+  .thumb span{ font-family:'IBM Plex Mono'; font-size:10px; color:#fff; background:rgba(11,35,64,0.55); padding:1px 5px; border-radius:4px; }
+  .result-actions{ margin-top:22px; display:flex; flex-direction:column; gap:10px; }
+  .note{ margin-top:12px; font-size:12px; color:var(--ink-mute); text-align:center; line-height:1.5; }
+
+  .error-box{ margin-top:16px; background:#FBEAE6; border:1.5px solid #F0C4B8; color:#C1503B; border-radius:14px; padding:12px 14px; font-size:13px; display:none; }
+  .error-box.show{ display:block; }
+
+  svg{display:block;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="back" id="home-link">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg>
+    </div>
+    <img class="mark" src="../../assets/logo.png" alt="Fanar">
+    <div class="word">FANAR <span>· slides</span></div>
+  </div>
+
+  <!-- ============ SCREEN 1 — HOME / UPLOAD ============ -->
+  <main class="screen active" id="screen-home">
+    <div class="hero">
+      <div class="badge-wrap">
+        <div class="beam-sweep"></div>
+        <img class="badge-logo" src="../../assets/logo.png" alt="Fanar">
+      </div>
+      <h1 class="title">Turn a lecture video<br>into a slide deck</h1>
+      <p class="sub">Upload a video file. Fanar scans every frame on your device and hands you back one clean PDF.</p>
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+      <b>Tap to choose a video</b>
+      <span>MP4, MOV, WEBM — processed entirely on your phone</span>
+    </div>
+    <input type="file" id="file-input" accept="video/*">
+
+    <div class="picked-row" id="picked-row">
+      <div class="picked-icon">VID</div>
+      <div class="picked-meta"><b id="picked-name">—</b><span id="picked-meta">—</span></div>
+      <svg class="picked-clear" id="picked-clear" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </div>
+
+    <div class="preview-wrap" id="preview-wrap">
+      <div class="preview-label">
+        <span>Optional: mark a webcam/cursor corner to ignore</span>
+        <a id="clear-rect-link">Clear</a>
+      </div>
+      <div class="preview-box" id="preview-box">
+        <canvas id="preview-canvas"></canvas>
+        <div class="exclude-rect" id="exclude-rect"></div>
+      </div>
+    </div>
+
+    <div class="field-row" id="sensitivity-row" style="display:none;">
+      <div class="chip-toggle" data-val="fine">Catch more slides</div>
+      <div class="chip-toggle active" data-val="normal">Normal</div>
+      <div class="chip-toggle" data-val="coarse">Fewer, stricter</div>
+    </div>
+
+    <div class="error-box" id="error-box"></div>
+
+    <button class="btn btn-primary" id="extract-btn" disabled>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+      Extract slides
+    </button>
+
+    <div class="steps">
+      <div class="step">
+        <div class="dot">01</div>
+        <div class="txt"><b>Upload the video</b><span>Any lecture, screen recording, or presentation clip.</span></div>
+      </div>
+      <div class="step">
+        <div class="dot">02</div>
+        <div class="txt"><b>Fanar sweeps the video</b><span>Every sampled frame is compared to the last — real changes are kept, duplicates dropped.</span></div>
+      </div>
+      <div class="step">
+        <div class="dot">03</div>
+        <div class="txt"><b>Get one PDF</b><span>Ordered, deduplicated, ready to download or share back to this chat.</span></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ SCREEN 2 — PROCESSING ============ -->
+  <main class="screen" id="screen-processing">
+    <div class="scan-panel">
+      <div class="scan-title">Sweeping the video</div>
+      <div class="scan-sub" id="scan-sub">Reading frames…</div>
+
+      <div class="ruler">
+        <div class="fill" id="ruler-fill"></div>
+        <div class="marks" id="ruler-marks"></div>
+        <div class="beam-line" id="beam-line"></div>
+      </div>
+
+      <div class="scan-stats">
+        <div class="pct" id="pct">0%</div>
+        <div class="found" id="found">0 slides found</div>
+      </div>
+
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="cancel-link" id="cancel-btn">Cancel</div>
+  </main>
+
+  <!-- ============ SCREEN 3 — RESULT ============ -->
+  <main class="screen" id="screen-result">
+    <div class="result-card">
+      <div class="result-head">
+        <div class="check">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+        <div>
+          <b id="result-count">0 slides captured</b>
+          <span>Nothing skipped, duplicates removed</span>
+        </div>
+      </div>
+
+      <div class="file-row">
+        <div class="file-icon">PDF</div>
+        <div class="file-meta">
+          <b id="file-name">slides.pdf</b>
+          <span id="file-meta-text">—</span>
+        </div>
+      </div>
+
+      <div class="grid-label">Preview</div>
+      <div class="thumb-grid" id="thumb-grid"></div>
+    </div>
+
+    <div class="result-actions">
+      <button class="btn btn-primary" id="download-btn">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>
+        Download PDF
+      </button>
+      <button class="btn btn-secondary" id="share-btn" style="display:none;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+        Share to chat
+      </button>
+      <button class="btn btn-ghost" id="new-btn">Extract another video</button>
+    </div>
+    <p class="note">Mini apps can't send files straight into a Telegram chat on their own — download it, or use Share if your device supports it, then drop it in the chat.</p>
+  </main>
+
+</div>
+
+<script>
+  // ---------- Telegram Mini App wiring ----------
+  const tg = window.Telegram ? window.Telegram.WebApp : null;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    try {
+      tg.setHeaderColor('#0B2340');
+      tg.setBackgroundColor('#F6FAFD');
+    } catch(e) {}
+  }
+
+  document.getElementById('home-link').addEventListener('click', () => {
+    window.location.href = '../../index.html';
+  });
+
+  // ---------- Screen management ----------
+  const homeScreen = document.getElementById('screen-home');
+  const procScreen = document.getElementById('screen-processing');
+  const resultScreen = document.getElementById('screen-result');
+  function showScreen(el){
+    [homeScreen, procScreen, resultScreen].forEach(s => s.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  // ---------- State ----------
+  let videoFile = null;
+  let videoEl = null;
+  let videoURL = null;
+  let excludeFrac = null; // {x,y,w,h} as 0..1 fractions of frame
+  let sensitivity = 'normal';
+  let cancelRequested = false;
+  let capturedSlides = []; // { dataURL, w, h, t }
+
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('file-input');
+  const pickedRow = document.getElementById('picked-row');
+  const pickedName = document.getElementById('picked-name');
+  const pickedMeta = document.getElementById('picked-meta');
+  const pickedClear = document.getElementById('picked-clear');
+  const previewWrap = document.getElementById('preview-wrap');
+  const previewCanvas = document.getElementById('preview-canvas');
+  const previewBox = document.getElementById('preview-box');
+  const excludeRectEl = document.getElementById('exclude-rect');
+  const clearRectLink = document.getElementById('clear-rect-link');
+  const sensitivityRow = document.getElementById('sensitivity-row');
+  const extractBtn = document.getElementById('extract-btn');
+  const errorBox = document.getElementById('error-box');
+
+  function showError(msg){
+    errorBox.textContent = msg;
+    errorBox.classList.add('show');
+  }
+  function clearError(){
+    errorBox.classList.remove('show');
+    errorBox.textContent = '';
+  }
+
+  function fmtBytes(b){
+    if (b < 1024*1024) return (b/1024).toFixed(0) + ' KB';
+    return (b/(1024*1024)).toFixed(1) + ' MB';
+  }
+  function fmtTime(sec){
+    const m = String(Math.floor(sec/60)).padStart(2,'0');
+    const s = String(Math.floor(sec%60)).padStart(2,'0');
+    return '00:' + m + ':' + s;
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  ['dragover','dragenter'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+  dropzone.addEventListener('drop', e => {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+  pickedClear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    resetFile();
+  });
+
+  function resetFile(){
+    videoFile = null;
+    if (videoURL) URL.revokeObjectURL(videoURL);
+    videoURL = null;
+    videoEl = null;
+    excludeFrac = null;
+    pickedRow.classList.remove('show');
+    previewWrap.classList.remove('show');
+    sensitivityRow.style.display = 'none';
+    excludeRectEl.style.display = 'none';
+    extractBtn.disabled = true;
+    fileInput.value = '';
+    clearError();
+  }
+
+  function handleFile(file){
+    clearError();
+    if (!file.type.startsWith('video/')){
+      showError('That file doesn\u2019t look like a video. Please choose an MP4, MOV, or WEBM.');
+      return;
+    }
+    videoFile = file;
+    pickedName.textContent = file.name;
+    pickedMeta.textContent = fmtBytes(file.size);
+    pickedRow.classList.add('show');
+
+    if (videoURL) URL.revokeObjectURL(videoURL);
+    videoURL = URL.createObjectURL(file);
+    videoEl = document.createElement('video');
+    videoEl.src = videoURL;
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    videoEl.preload = 'auto';
+
+    videoEl.addEventListener('loadedmetadata', () => {
+      if (!isFinite(videoEl.duration) || videoEl.duration <= 0){
+        showError('Couldn\u2019t read this video\u2019s length. Try a different file or format.');
+        extractBtn.disabled = true;
+        return;
+      }
+      drawPreviewFrame();
+      sensitivityRow.style.display = 'flex';
+      extractBtn.disabled = false;
+    }, { once:true });
+
+    videoEl.addEventListener('error', () => {
+      showError('This browser couldn\u2019t decode that video. Try re-exporting as MP4 (H.264).');
+      extractBtn.disabled = true;
+    });
+  }
+
+  function drawPreviewFrame(){
+    const seekTo = Math.min(1, videoEl.duration * 0.1);
+    videoEl.currentTime = seekTo;
+    videoEl.addEventListener('seeked', function onSeek(){
+      videoEl.removeEventListener('seeked', onSeek);
+      const w = videoEl.videoWidth, h = videoEl.videoHeight;
+      previewCanvas.width = w;
+      previewCanvas.height = h;
+      const ctx = previewCanvas.getContext('2d');
+      ctx.drawImage(videoEl, 0, 0, w, h);
+      previewWrap.classList.add('show');
+    }, { once:true });
+  }
+
+  // ---------- Exclude-region drawing (tap/drag on preview) ----------
+  let dragging = false, dragStart = null;
+  function boxPointFromEvent(e){
+    const rect = previewBox.getBoundingClientRect();
+    const pt = e.touches ? e.touches[0] : e;
+    let x = (pt.clientX - rect.left) / rect.width;
+    let y = (pt.clientY - rect.top) / rect.height;
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+    return {x, y};
+  }
+  function updateRectVisual(x0,y0,x1,y1){
+    const rect = previewBox.getBoundingClientRect();
+    const left = Math.min(x0,x1)*rect.width;
+    const top = Math.min(y0,y1)*rect.height;
+    const w = Math.abs(x1-x0)*rect.width;
+    const h = Math.abs(y1-y0)*rect.height;
+    excludeRectEl.style.left = left+'px';
+    excludeRectEl.style.top = top+'px';
+    excludeRectEl.style.width = w+'px';
+    excludeRectEl.style.height = h+'px';
+    excludeRectEl.style.display = (w>4 && h>4) ? 'block' : 'none';
+  }
+  function startDrag(e){
+    e.preventDefault();
+    dragging = true;
+    dragStart = boxPointFromEvent(e);
+  }
+  function moveDrag(e){
+    if (!dragging) return;
+    e.preventDefault();
+    const p = boxPointFromEvent(e);
+    updateRectVisual(dragStart.x, dragStart.y, p.x, p.y);
+  }
+  function endDrag(e){
+    if (!dragging) return;
+    dragging = false;
+    const p = boxPointFromEvent(e.changedTouches ? {touches:e.changedTouches} : e);
+    const x0 = Math.min(dragStart.x, p.x), y0 = Math.min(dragStart.y, p.y);
+    const x1 = Math.max(dragStart.x, p.x), y1 = Math.max(dragStart.y, p.y);
+    if ((x1-x0) > 0.02 && (y1-y0) > 0.02){
+      excludeFrac = {x:x0, y:y0, w:x1-x0, h:y1-y0};
+    }
+  }
+  previewBox.addEventListener('mousedown', startDrag);
+  previewBox.addEventListener('mousemove', moveDrag);
+  window.addEventListener('mouseup', endDrag);
+  previewBox.addEventListener('touchstart', startDrag, {passive:false});
+  previewBox.addEventListener('touchmove', moveDrag, {passive:false});
+  previewBox.addEventListener('touchend', endDrag);
+  clearRectLink.addEventListener('click', () => {
+    excludeFrac = null;
+    excludeRectEl.style.display = 'none';
+  });
+
+  // ---------- Sensitivity toggle ----------
+  document.querySelectorAll('.chip-toggle').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.chip-toggle').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      sensitivity = chip.getAttribute('data-val');
+    });
+  });
+
+  // ---------- Processing UI ----------
+  const ruleMarksEl = document.getElementById('ruler-marks');
+  const fillEl = document.getElementById('ruler-fill');
+  const beamEl = document.getElementById('beam-line');
+  const pctEl = document.getElementById('pct');
+  const foundEl = document.getElementById('found');
+  const logEl = document.getElementById('log');
+  const scanSub = document.getElementById('scan-sub');
+
+  function addLogLine(timeSec, idx){
+    const line = document.createElement('div');
+    line.innerHTML = fmtTime(timeSec) + '  <span>change detected \u2192 slide ' + idx + '</span>';
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.children.length > 20) logEl.removeChild(logEl.firstChild);
+  }
+  function addMark(pct){
+    const d = document.createElement('div');
+    d.className = 'anchor';
+    d.style.left = pct + '%';
+    ruleMarksEl.appendChild(d);
+  }
+  function updateProgress(pct){
+    fillEl.style.width = pct + '%';
+    beamEl.style.left = pct + '%';
+    pctEl.textContent = Math.floor(pct) + '%';
+  }
+
+  // ---------- Core extraction ----------
+  // Small canvas used purely for diffing (cheap to read pixels from).
+  const diffCanvas = document.createElement('canvas');
+  const diffCtx = diffCanvas.getContext('2d', { willReadFrequently:true });
+  const DIFF_W = 160, DIFF_H = 90;
+  diffCanvas.width = DIFF_W; diffCanvas.height = DIFF_H;
+
+  // Full-resolution canvas used for the actual captured slide image.
+  const captureCanvas = document.createElement('canvas');
+  const captureCtx = captureCanvas.getContext('2d');
+
+  function seekTo(t){
+    return new Promise((resolve) => {
+      const onSeek = () => { videoEl.removeEventListener('seeked', onSeek); resolve(); };
+      videoEl.addEventListener('seeked', onSeek);
+      videoEl.currentTime = t;
+      // Safety timeout in case 'seeked' never fires on a given browser/codec combo
+      setTimeout(resolve, 900);
+    });
+  }
+
+  function grabDiffFrame(){
+    diffCtx.drawImage(videoEl, 0, 0, DIFF_W, DIFF_H);
+    return diffCtx.getImageData(0, 0, DIFF_W, DIFF_H).data;
+  }
+
+  function frameDiff(a, b, excludeRect){
+    // Mean absolute grayscale difference, skipping any excluded rectangle
+    // (used to ignore a webcam bubble or a moving cursor corner).
+    let sum = 0, count = 0;
+    const exX0 = excludeRect ? Math.floor(excludeRect.x * DIFF_W) : -1;
+    const exY0 = excludeRect ? Math.floor(excludeRect.y * DIFF_H) : -1;
+    const exX1 = excludeRect ? Math.ceil((excludeRect.x + excludeRect.w) * DIFF_W) : -1;
+    const exY1 = excludeRect ? Math.ceil((excludeRect.y + excludeRect.h) * DIFF_H) : -1;
+    for (let y = 0; y < DIFF_H; y += 2){
+      const inExY = excludeRect && y >= exY0 && y < exY1;
+      for (let x = 0; x < DIFF_W; x += 2){
+        if (inExY && x >= exX0 && x < exX1) continue;
+        const i = (y * DIFF_W + x) * 4;
+        const ga = (a[i] + a[i+1] + a[i+2]) / 3;
+        const gb = (b[i] + b[i+1] + b[i+2]) / 3;
+        sum += Math.abs(ga - gb);
+        count++;
+      }
+    }
+    return count ? sum / count : 0;
+  }
+
+  const THRESHOLDS = { fine: 8, normal: 14, coarse: 22 };
+  const MIN_GAP_SEC = 0.6;   // don't capture two slides closer together than this
+  const SAMPLE_STEP = 0.5;   // seconds between sampled frames
+
+  async function runExtraction(){
+    cancelRequested = false;
+    capturedSlides = [];
+    logEl.innerHTML = '';
+    ruleMarksEl.innerHTML = '';
+    updateProgress(0);
+    foundEl.textContent = '0 slides found';
+    scanSub.textContent = 'Reading frames…';
+    showScreen(procScreen);
+
+    const duration = videoEl.duration;
+    const threshold = THRESHOLDS[sensitivity] || THRESHOLDS.normal;
+    const targetW = Math.min(1280, videoEl.videoWidth || 1280);
+    const targetH = Math.round((videoEl.videoHeight || 720) * (targetW / (videoEl.videoWidth || 1280)));
+    captureCanvas.width = targetW;
+    captureCanvas.height = targetH;
+
+    let prevDiffData = null;
+    let lastCaptureT = -999;
+    let t = 0;
+
+    // Always try to capture the very first frame as slide 1.
+    while (t <= duration){
+      if (cancelRequested) return;
+      await seekTo(t);
+      const diffData = grabDiffFrame();
+      let isChange = false;
+      if (prevDiffData === null){
+        isChange = true; // first sampled frame
+      } else {
+        const d = frameDiff(prevDiffData, diffData, excludeFrac);
+        if (d >= threshold && (t - lastCaptureT) >= MIN_GAP_SEC) isChange = true;
+      }
+
+      if (isChange){
+        captureCtx.drawImage(videoEl, 0, 0, targetW, targetH);
+        const dataURL = captureCanvas.toDataURL('image/jpeg', 0.86);
+        capturedSlides.push({ dataURL, w: targetW, h: targetH, t });
+        lastCaptureT = t;
+        const pctNow = (t / duration) * 100;
+        addMark(pctNow);
+        addLogLine(t, capturedSlides.length);
+        foundEl.textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' found';
+      }
+
+      prevDiffData = diffData;
+      updateProgress(Math.min(99, (t / duration) * 100));
+      t += SAMPLE_STEP;
+      // yield to the UI thread so the progress bar actually paints
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    if (cancelRequested) return;
+    scanSub.textContent = 'Compiling PDF…';
+    updateProgress(100);
+    await new Promise(r => setTimeout(r, 250));
+
+    if (capturedSlides.length === 0){
+      showScreen(homeScreen);
+      showError('No slide changes were detected. Try "Catch more slides" sensitivity, or check the video actually contains still slides.');
+      return;
+    }
+
+    await buildPDF();
+    showScreen(resultScreen);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+  }
+
+  // ---------- PDF assembly (jsPDF, fully client-side) ----------
+  let pdfBlob = null;
+  let pdfFileName = 'Slides.pdf';
+
+  async function buildPDF(){
+    const { jsPDF } = window.jspdf;
+    const first = capturedSlides[0];
+    const orientation = first.w >= first.h ? 'l' : 'p';
+    const doc = new jsPDF({ orientation, unit: 'pt', format: [first.w, first.h] });
+
+    capturedSlides.forEach((slide, i) => {
+      if (i > 0){
+        doc.addPage([slide.w, slide.h], slide.w >= slide.h ? 'l' : 'p');
+      }
+      doc.addImage(slide.dataURL, 'JPEG', 0, 0, slide.w, slide.h);
+    });
+
+    const baseName = (videoFile.name || 'lecture').replace(/\.[^/.]+$/, '');
+    const safeName = baseName.replace(/[^a-z0-9\-_ ]/gi, '').trim().replace(/\s+/g,'_') || 'lecture';
+    pdfFileName = safeName + '_slides.pdf';
+    pdfBlob = doc.output('blob');
+
+    document.getElementById('result-count').textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' captured';
+    document.getElementById('file-name').textContent = pdfFileName;
+    document.getElementById('file-meta-text').textContent = capturedSlides.length + ' pages · ' + fmtBytes(pdfBlob.size);
+
+    const grid = document.getElementById('thumb-grid');
+    grid.innerHTML = '';
+    capturedSlides.slice(0, 9).forEach((slide, i) => {
+      const d = document.createElement('div');
+      d.className = 'thumb';
+      d.style.backgroundImage = "url('" + slide.dataURL + "')";
+      d.innerHTML = '<span>' + (i+1) + '</span>';
+      grid.appendChild(d);
+    });
+
+    // Show the native Share option only if the browser can actually share a file.
+    const shareBtn = document.getElementById('share-btn');
+    const testFile = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files:[testFile] })){
+      shareBtn.style.display = 'flex';
+    } else {
+      shareBtn.style.display = 'none';
+    }
+  }
+
+  document.getElementById('download-btn').addEventListener('click', () => {
+    if (!pdfBlob) return;
+    const url = URL.createObjectURL(pdfBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = pdfFileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  });
+
+  document.getElementById('share-btn').addEventListener('click', async () => {
+    if (!pdfBlob) return;
+    try{
+      const file = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
+      await navigator.share({ files: [file], title: pdfFileName });
+    } catch(e){ /* user cancelled or unsupported — download button remains as fallback */ }
+  });
+
+  document.getElementById('new-btn').addEventListener('click', () => {
+    resetFile();
+    showScreen(homeScreen);
+  });
+
+  extractBtn.addEventListener('click', () => {
+    if (extractBtn.disabled || !videoEl) return;
+    runExtraction();
+  });
+
+  document.getElementById('cancel-btn').addEventListener('click', () => {
+    cancelRequested = true;
+    showScreen(homeScreen);
+  });
+</script>
+</body>
+</html>
