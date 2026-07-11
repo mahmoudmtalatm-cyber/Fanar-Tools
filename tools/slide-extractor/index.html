@@ -398,6 +398,10 @@
 
   function handleFile(file){
     clearError();
+    if (file.type === 'image/gif'){
+      showError('Animated GIFs can\u2019t be read directly \u2014 screen-record it playing (or re-export it as MP4/WEBM) and upload that instead.');
+      return;
+    }
     if (!file.type.startsWith('video/')){
       showError('That file doesn\u2019t look like a video. Please choose an MP4, MOV, or WEBM.');
       return;
@@ -564,36 +568,62 @@
     return diffCtx.getImageData(0, 0, DIFF_W, DIFF_H).data;
   }
 
-  function frameDiff(a, b, excludeRect){
-    // Mean absolute grayscale difference, skipping any excluded rectangle
-    // (used to ignore a webcam bubble or a moving cursor corner).
-    let sum = 0, count = 0;
-    const exX0 = excludeRect ? Math.floor(excludeRect.x * DIFF_W) : -1;
-    const exY0 = excludeRect ? Math.floor(excludeRect.y * DIFF_H) : -1;
-    const exX1 = excludeRect ? Math.ceil((excludeRect.x + excludeRect.w) * DIFF_W) : -1;
-    const exY1 = excludeRect ? Math.ceil((excludeRect.y + excludeRect.h) * DIFF_H) : -1;
-    for (let y = 0; y < DIFF_H; y += 2){
-      const inExY = excludeRect && y >= exY0 && y < exY1;
-      for (let x = 0; x < DIFF_W; x += 2){
-        if (inExY && x >= exX0 && x < exX1) continue;
-        const i = (y * DIFF_W + x) * 4;
-        const ga = (a[i] + a[i+1] + a[i+2]) / 3;
-        const gb = (b[i] + b[i+1] + b[i+2]) / 3;
-        sum += Math.abs(ga - gb);
-        count++;
+  // Block-grid diff: splits the frame into a grid and asks "what FRACTION of
+  // the grid actually changed?" instead of one blurred whole-frame average.
+  // This is what lets the detector tell the difference between:
+  //   - a genuine slide transition (most of the grid changes at once), and
+  //   - an embedded GIF/video/webcam bubble looping inside an otherwise
+  //     static slide (only a handful of blocks ever change).
+  // A plain whole-frame average can't tell these apart: a small looping clip
+  // can sit right at the same average-diff level as a real transition, which
+  // either stops the slide from ever "settling" or causes repeat captures of
+  // the same slide as the clip keeps playing.
+  const GRID_COLS = 10, GRID_ROWS = 6;
+  const BLOCK_ACTIVE_THRESH = 10; // per-block mean grayscale diff to count that block as "changed"
+
+  function blockChangeFraction(a, b, excludeRect){
+    const blockW = DIFF_W / GRID_COLS, blockH = DIFF_H / GRID_ROWS;
+    const exX0 = excludeRect ? excludeRect.x * DIFF_W : -1;
+    const exY0 = excludeRect ? excludeRect.y * DIFF_H : -1;
+    const exX1 = excludeRect ? (excludeRect.x + excludeRect.w) * DIFF_W : -1;
+    const exY1 = excludeRect ? (excludeRect.y + excludeRect.h) * DIFF_H : -1;
+
+    let activeBlocks = 0, countedBlocks = 0;
+    for (let gy = 0; gy < GRID_ROWS; gy++){
+      const by0 = Math.floor(gy * blockH), by1 = Math.floor((gy + 1) * blockH);
+      for (let gx = 0; gx < GRID_COLS; gx++){
+        const bx0 = Math.floor(gx * blockW), bx1 = Math.floor((gx + 1) * blockW);
+        const cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
+        if (excludeRect && cx >= exX0 && cx < exX1 && cy >= exY0 && cy < exY1) continue;
+
+        let sum = 0, n = 0;
+        for (let y = by0; y < by1; y += 2){
+          for (let x = bx0; x < bx1; x += 2){
+            const i = (y * DIFF_W + x) * 4;
+            const ga = (a[i] + a[i+1] + a[i+2]) / 3;
+            const gb = (b[i] + b[i+1] + b[i+2]) / 3;
+            sum += Math.abs(ga - gb);
+            n++;
+          }
+        }
+        countedBlocks++;
+        if (n && (sum / n) > BLOCK_ACTIVE_THRESH) activeBlocks++;
       }
     }
-    return count ? sum / count : 0;
+    return countedBlocks ? activeBlocks / countedBlocks : 0;
   }
 
-  // Each preset controls: how big a change must be to count as "a new slide is
-  // forming" (change), how small frame-to-frame motion must be to count as
-  // "holding still" (still), how long it must hold still before we trust it's
-  // done animating (stableSec), and how often we sample (sampleStep).
+  // Each preset controls: what FRACTION of the frame must change to count as
+  // "a new slide is forming" (changeFrac), how small that fraction must be
+  // frame-to-frame to count as "holding still" (stillFrac — deliberately
+  // above 0 so a modest-sized looping GIF/video/webcam inside the slide
+  // doesn't prevent it from ever being seen as settled), how long it must
+  // hold still before we trust it's done animating (stableSec), and how
+  // often we sample (sampleStep).
   const SENSITIVITY_PRESETS = {
-    fine:   { change: 7,  still: 3, stableSec: 0.5, sampleStep: 0.25 },
-    normal: { change: 12, still: 4, stableSec: 0.7, sampleStep: 0.35 },
-    coarse: { change: 18, still: 5, stableSec: 0.9, sampleStep: 0.5  }
+    fine:   { changeFrac: 0.28, stillFrac: 0.16, stableSec: 0.5, sampleStep: 0.25 },
+    normal: { changeFrac: 0.35, stillFrac: 0.18, stableSec: 0.7, sampleStep: 0.35 },
+    coarse: { changeFrac: 0.45, stillFrac: 0.20, stableSec: 0.9, sampleStep: 0.5  }
   };
   const MIN_GAP_SEC = 1.0;              // don't capture two slides closer together than this
   const FALLBACK_FIRST_CAPTURE_SEC = 4; // guarantee an opening slide even on constantly-noisy video
@@ -643,8 +673,8 @@
       if (prevSampleData === null){
         stillStreakStart = t; // nothing to compare yet — treat as the start of a hold
       } else {
-        const motion = frameDiff(prevSampleData, diffData, excludeFrac);
-        if (motion < preset.still){
+        const motionFrac = blockChangeFraction(prevSampleData, diffData, excludeFrac);
+        if (motionFrac < preset.stillFrac){
           if (stillStreakStart === null) stillStreakStart = t;
         } else {
           stillStreakStart = null; // still animating/transitioning — keep waiting
@@ -652,8 +682,8 @@
       }
 
       if (!pendingCandidate && baselineData !== null){
-        const diffFromBaseline = frameDiff(baselineData, diffData, excludeFrac);
-        if (diffFromBaseline >= preset.change){
+        const changeFrac = blockChangeFraction(baselineData, diffData, excludeFrac);
+        if (changeFrac >= preset.changeFrac){
           pendingCandidate = true;
           scanSub.textContent = 'Change detected — waiting for it to settle…';
         }
@@ -685,8 +715,8 @@
     scanSub.textContent = 'Checking final frame…';
     await seekTo(duration);
     const finalDiffData = grabDiffFrame();
-    const finalDiffFromBaseline = baselineData ? frameDiff(baselineData, finalDiffData, excludeFrac) : Infinity;
-    if ((baselineData === null || finalDiffFromBaseline >= preset.change * 0.6) && (duration - lastCaptureT) >= 0.3){
+    const finalChangeFrac = baselineData ? blockChangeFraction(baselineData, finalDiffData, excludeFrac) : Infinity;
+    if ((baselineData === null || finalChangeFrac >= preset.changeFrac * 0.6) && (duration - lastCaptureT) >= 0.3){
       captureSlideAt(duration);
     }
 
