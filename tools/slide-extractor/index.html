@@ -727,6 +727,26 @@
     return kept;
   }
 
+  // Order-independent safety net: removes any remaining pair of captures
+  // that are essentially the same frame (near-zero difference), regardless
+  // of how far apart in time they were taken. dedupeBuilds only ever
+  // compares *neighbours* in a build-chain, so it can't catch a case like
+  // the presenter briefly flicking back to a slide already captured, or two
+  // separate "settled" holds on either side of a short camera/webcam blip
+  // that both happen to be the same underlying slide. Uses the same
+  // near-nothing threshold as the live scan (MIN_UPDATE_FRAC) so it only
+  // ever merges frames that are genuinely indistinguishable, never two
+  // slides that just happen to look broadly similar.
+  function removeDuplicates(slides, excludeRect){
+    if (slides.length <= 1) return slides;
+    const kept = [];
+    for (const s of slides){
+      const isDuplicate = kept.some(k => blockChangeFraction(k.diffSnap, s.diffSnap, excludeRect) <= MIN_UPDATE_FRAC);
+      if (!isDuplicate) kept.push(s);
+    }
+    return kept;
+  }
+
   async function runExtraction(){
     cancelRequested = false;
     capturedSlides = [];
@@ -770,20 +790,40 @@
     // `stableSec` seconds, so mid-transition / mid-animation frames never
     // get grabbed — we always land on a finished, settled frame.
     //
-    // Every time we settle on a new frame that differs at all from the last
-    // one we kept (baselineData), buildRelation() decides what kind of
-    // difference it is:
+    // Getting to "settled" takes three checks working together, not one:
+    //   1. step-to-step motion has stayed under stillFrac for the whole
+    //      streak (the original check) — rules out anything visibly moving
+    //      right now.
+    //   2. cumulative drift from the START of that streak to now is ALSO
+    //      under stillFrac — rules out a slow fade/crossfade that a coarse
+    //      sample rate could otherwise see as "calm" on every individual
+    //      step while it's still steadily, continuously changing
+    //      underneath. If this drift check fails, the hold window is
+    //      restarted from right now rather than left pinned to an
+    //      increasingly stale reference point (which would otherwise never
+    //      pass again for the rest of the video).
+    //   3. that settled result has to repeat on two samples in a row before
+    //      we act on it. A slow fade can otherwise produce one coincidental
+    //      sample that looks settled purely by timing — confirmed against a
+    //      synthetic slow-crossfade test — while a genuinely finished hold
+    //      always passes on consecutive samples, at the cost of at most one
+    //      extra sampleStep of latency.
+    // Together these mean a slide is only ever grabbed once it is truly,
+    // fully rendered — never half-visible mid-animation.
+    //
+    // Once settled, buildRelation() decides what kind of difference this is
+    // from the slide we're currently tracking:
     //   - additive  → the same slide just gained detail (a bullet/image
-    //     landed) → UPDATE the existing capture in place. This is the fix
-    //     for slides being left incomplete: we no longer wait for a large
-    //     cumulative change before caring about an update, so the very last
-    //     small addition right before the presenter clicks on is no longer
-    //     dropped.
+    //     landed) → UPDATE the existing capture in place, so whatever we
+    //     keep is always the most complete version of that slide, no matter
+    //     how small the last addition was.
     //   - a swap    → genuinely a new slide → capture it as a new page.
     let baselineData = null;      // low-res frame data of the slide we're currently tracking
     let baselineIndex = -1;       // its index in capturedSlides
     let prevSampleData = null;    // low-res frame data of the previous sample
     let stillStreakStart = null;  // timestamp when the current stillness streak began
+    let stillStreakStartData = null; // frame data at the moment the streak began
+    let consecutiveStable = 0;    // how many samples in a row have looked settled
     let lastCaptureT = -999;      // timestamp of the last genuinely NEW slide (not update)
     let t = 0;
 
@@ -794,20 +834,52 @@
 
       if (prevSampleData === null){
         stillStreakStart = t; // nothing to compare yet — treat as the start of a hold
+        stillStreakStartData = diffData;
       } else {
         const motionFrac = blockChangeFraction(prevSampleData, diffData, excludeFrac);
         if (motionFrac < preset.stillFrac){
-          if (stillStreakStart === null) stillStreakStart = t;
+          if (stillStreakStart === null){
+            stillStreakStart = t;
+            stillStreakStartData = diffData;
+          }
         } else {
           stillStreakStart = null; // still animating/transitioning — keep waiting
+          stillStreakStartData = null;
           scanSub.textContent = 'Change detected — waiting for it to settle…';
         }
       }
 
-      const stableEnough = stillStreakStart !== null && (t - stillStreakStart) >= preset.stableSec;
+      const heldLongEnough = stillStreakStart !== null && (t - stillStreakStart) >= preset.stableSec;
+      let stableEnough = false;
+      if (heldLongEnough){
+        const driftSinceHoldStart = blockChangeFraction(stillStreakStartData, diffData, excludeFrac);
+        stableEnough = driftSinceHoldStart < preset.stillFrac;
+        if (!stableEnough){
+          // The picture has technically stayed under the per-step motion
+          // threshold this whole time, yet has still drifted a long way
+          // from where the hold began — a slow, continuous fade that a
+          // coarse sample rate can't see moving step-to-step. Treat that as
+          // still-in-progress and restart the hold window from right now,
+          // rather than staying pinned to an increasingly stale reference
+          // point (which would otherwise never settle again for the rest
+          // of the video).
+          stillStreakStart = t;
+          stillStreakStartData = diffData;
+        }
+      }
+      // Require the frame to look settled on two samples in a row before
+      // acting on it at all. A slow fade can otherwise produce an
+      // occasional one-off sample that looks "settled" purely by
+      // coincidence of timing (caught this with a synthetic slow-crossfade
+      // test); real, finished holds always pass on consecutive samples,
+      // so this costs at most one extra sampleStep of latency on a
+      // genuine settle while reliably rejecting fade artifacts.
+      consecutiveStable = stableEnough ? consecutiveStable + 1 : 0;
+      const confirmedStable = consecutiveStable >= 2;
+
       const forceFirstCapture = baselineData === null && t >= FALLBACK_FIRST_CAPTURE_SEC;
 
-      if (stableEnough || forceFirstCapture){
+      if (confirmedStable || forceFirstCapture){
         if (baselineData === null){
           captureSlideAt(t, diffData);
           baselineIndex = capturedSlides.length - 1;
@@ -867,14 +939,20 @@
       return;
     }
 
-    // Smart cleanup: collapse "slide built up piece by piece" chains (bullets
-    // or images added one at a time) down to just their final, complete
-    // frame — while leaving genuinely different slides (swapped text/images)
-    // untouched as separate pages.
+    // Smart cleanup, two passes:
+    //  1. Collapse "slide built up piece by piece" chains (bullets or
+    //     images added one at a time) down to just their final, complete
+    //     frame — while leaving genuinely different slides (swapped
+    //     text/images) untouched as separate pages.
+    //  2. Remove any remaining exact/near-duplicate frames regardless of
+    //     their position in the deck (e.g. a brief revisit of an earlier
+    //     slide, or two separate settled holds that turned out to be the
+    //     same picture).
     scanSub.textContent = 'Comparing slides for duplicates…';
     await new Promise(r => setTimeout(r, 0));
     const rawCount = capturedSlides.length;
     capturedSlides = dedupeBuilds(capturedSlides, excludeFrac);
+    capturedSlides = removeDuplicates(capturedSlides, excludeFrac);
     lastMergedCount = rawCount - capturedSlides.length;
 
     scanSub.textContent = 'Compiling PDF…';
