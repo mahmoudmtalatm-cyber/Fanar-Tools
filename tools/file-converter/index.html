@@ -9,7 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.11.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -290,6 +290,27 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   }
 
+  // ---------- Library availability guard ----------
+  // If a CDN script is blocked or fails to load, conversions used to hang or
+  // throw a cryptic error. Check up front and fail fast with a clear message.
+  const LIB_CHECKS = {
+    jspdf: () => !!window.jspdf,
+    pdfjs: () => !!window.pdfjsLib,
+    jszip: () => !!window.JSZip,
+    pptxgen: () => !!window.PptxGenJS,
+    mammoth: () => !!window.mammoth,
+    html2canvas: () => !!window.html2canvas
+  };
+  const LIB_LABELS = {
+    jspdf: 'PDF engine', pdfjs: 'PDF reader', jszip: 'ZIP packager',
+    pptxgen: 'PowerPoint engine', mammoth: 'Word reader', html2canvas: 'page renderer'
+  };
+  function checkLibrary(name){
+    if (!LIB_CHECKS[name]()){
+      throw new Error('The ' + LIB_LABELS[name] + ' didn\'t load (probably a network hiccup). Check your connection and try again.');
+    }
+  }
+
   // ---------- Screen management ----------
   const homeScreen = document.getElementById('screen-home');
   const procScreen = document.getElementById('screen-processing');
@@ -483,6 +504,7 @@
     return { blob, ext: targetExt, mime };
   }
   async function imageToPdf(file){
+    checkLibrary('jspdf');
     onProgress(20, 'Reading image…');
     const img = await loadImageEl(file);
     onProgress(60, 'Building PDF…');
@@ -494,6 +516,7 @@
     return { blob: doc.output('blob'), ext:'pdf', mime:'application/pdf' };
   }
   async function imageToPptx(file){
+    checkLibrary('pptxgen');
     onProgress(20, 'Reading image…');
     const img = await loadImageEl(file);
     const wIn = img.naturalWidth/96, hIn = img.naturalHeight/96;
@@ -519,6 +542,7 @@
 
   // ---------- PDF conversions ----------
   async function loadPdf(file){
+    checkLibrary('pdfjs');
     const buf = await file.arrayBuffer();
     return pdfjsLib.getDocument({ data: buf }).promise;
   }
@@ -536,6 +560,7 @@
       blobs.push(await canvasToBlob(canvas, 'image/png'));
     }
     if (blobs.length === 1) return { blob: blobs[0], ext:'png', mime:'image/png' };
+    checkLibrary('jszip');
     onProgress(90, 'Zipping ' + blobs.length + ' images…');
     const zip = new JSZip();
     blobs.forEach((b,i) => zip.file('page-' + (i+1) + '.png', b));
@@ -555,6 +580,7 @@
     return { blob: new Blob([text], {type:'text/plain'}), ext:'txt', mime:'text/plain' };
   }
   async function pdfToPptx(file){
+    checkLibrary('pptxgen');
     onProgress(5, 'Opening PDF…');
     const pdf = await loadPdf(file);
     const firstPage = await pdf.getPage(1);
@@ -582,6 +608,7 @@
 
   // ---------- PPTX conversions (best-effort layout rendering) ----------
   async function readPptxSlides(file){
+    checkLibrary('jszip');
     const zip = await JSZip.loadAsync(file);
     const presFile = zip.file('ppt/presentation.xml');
     if (!presFile) throw new Error('This doesn\'t look like a valid PowerPoint file.');
@@ -699,6 +726,7 @@
   }
 
   async function pptxToPdf(file){
+    checkLibrary('jspdf');
     onProgress(5, 'Reading PowerPoint…');
     const { zip, pageW, pageH, slideFiles } = await readPptxSlides(file);
     const { jsPDF } = window.jspdf;
@@ -724,6 +752,7 @@
       blobs.push(await canvasToBlob(canvas, 'image/png'));
     }
     if (blobs.length === 1) return { blob: blobs[0], ext:'png', mime:'image/png' };
+    checkLibrary('jszip');
     onProgress(90, 'Zipping ' + blobs.length + ' images…');
     const zipOut = new JSZip();
     blobs.forEach((b,i) => zipOut.file('slide-' + (i+1) + '.png', b));
@@ -733,6 +762,7 @@
 
   // ---------- DOCX conversions ----------
   async function docxToText(file){
+    checkLibrary('mammoth');
     onProgress(20, 'Reading Word document…');
     const arrayBuffer = await file.arrayBuffer();
     const result = await mammoth.extractRawText({ arrayBuffer });
@@ -740,6 +770,7 @@
     return { blob: new Blob([result.value], {type:'text/plain'}), ext:'txt', mime:'text/plain' };
   }
   async function docxToPdf(file){
+    checkLibrary('mammoth'); checkLibrary('html2canvas'); checkLibrary('jspdf');
     onProgress(10, 'Reading Word document…');
     const arrayBuffer = await file.arrayBuffer();
     const result = await mammoth.convertToHtml({ arrayBuffer });
@@ -787,6 +818,7 @@
 
   // ---------- Plain text conversions ----------
   async function textToPdf(file){
+    checkLibrary('jspdf');
     onProgress(20, 'Reading text…');
     const text = await file.text();
     const { jsPDF } = window.jspdf;
@@ -836,6 +868,9 @@
 
   // ---------- Run ----------
   let outputBlob = null, outputFileName = '', outputMime = '';
+  let outputObjectUrl = null;   // instant, works great on desktop + Android
+  let outputDataUrl = null;     // fallback, works better on iOS Safari / some in-app browsers
+  let outputFile = null;        // pre-built File object for Web Share
 
   async function runConversion(){
     cancelRequested = false;
@@ -852,18 +887,27 @@
       outputMime = result.mime;
       outputFileName = baseName(currentFile.name) + '.' + result.ext;
 
+      // Build every download/share primitive *now*, while we're still inside
+      // this async chain, so that later button taps only need to run a single
+      // synchronous line — that's what keeps the "user gesture" alive on
+      // mobile browsers and Telegram's in-app WebView, which otherwise
+      // silently swallow downloads triggered after an `await`.
+      if (outputObjectUrl) URL.revokeObjectURL(outputObjectUrl);
+      outputObjectUrl = URL.createObjectURL(outputBlob);
+      try { outputDataUrl = await blobToDataURL(outputBlob); } catch(e){ outputDataUrl = null; }
+      try { outputFile = new File([outputBlob], outputFileName, { type: outputMime }); } catch(e){ outputFile = null; }
+
       document.getElementById('result-icon').textContent = result.ext.toUpperCase().slice(0,4);
       document.getElementById('file-name').textContent = outputFileName;
       document.getElementById('file-meta-text').textContent = fmtBytes(outputBlob.size);
       document.getElementById('result-sub').textContent = 'Ready to download';
 
+      // Show Share whenever the Web Share API exists at all — gating on
+      // canShare() alone was hiding the button on browsers where canShare
+      // throws or misjudges the File object, which is why "Share to chat"
+      // was missing on mobile. The click handler still falls back safely.
       const shareBtn = document.getElementById('share-btn');
-      const testFile = new File([outputBlob], outputFileName, { type: outputMime });
-      if (navigator.canShare && navigator.canShare({ files:[testFile] })){
-        shareBtn.style.display = 'flex';
-      } else {
-        shareBtn.style.display = 'none';
-      }
+      shareBtn.style.display = (typeof navigator.share === 'function') ? 'flex' : 'none';
 
       updateProgress(100);
       showScreen(resultScreen);
@@ -875,13 +919,9 @@
     }
   }
 
-  // ---------- Robust download (works inside Telegram's in-app browser too) ----------
-  // Telegram's WebView on iOS/Android can silently swallow blob: URL downloads,
-  // so we convert to a base64 data: URL first — that triggers a real save/share
-  // prompt far more reliably across desktop, Android and iOS.
-  function triggerDataUrlDownload(dataUrl, filename){
+  function triggerUrlDownload(url, filename){
     const a = document.createElement('a');
-    a.href = dataUrl;
+    a.href = url;
     a.download = filename;
     a.rel = 'noopener';
     document.body.appendChild(a);
@@ -889,41 +929,47 @@
     document.body.removeChild(a);
   }
 
-  document.getElementById('download-btn').addEventListener('click', async () => {
+  // ---------- Download / Open / Share ----------
+  // Every handler below is 100% synchronous (no await before the download
+  // actually fires) because the URLs and File object were already computed
+  // in runConversion(). This is what makes the buttons work instantly and
+  // reliably on phones, not just desktop.
+
+  document.getElementById('download-btn').addEventListener('click', () => {
     if (!outputBlob) return;
-    try {
-      const dataUrl = await blobToDataURL(outputBlob);
-      triggerDataUrlDownload(dataUrl, outputFileName);
-    } catch(e){
-      // Fallback to a plain object URL if base64 conversion fails for a huge file
-      const url = URL.createObjectURL(outputBlob);
-      triggerDataUrlDownload(url, outputFileName);
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    // Blob URLs are the most reliable trigger on desktop and Android Chrome.
+    if (outputObjectUrl){
+      triggerUrlDownload(outputObjectUrl, outputFileName);
+    } else if (outputDataUrl){
+      triggerUrlDownload(outputDataUrl, outputFileName);
     }
   });
 
-  document.getElementById('open-btn').addEventListener('click', async () => {
+  document.getElementById('open-btn').addEventListener('click', () => {
     if (!outputBlob) return;
-    try {
-      const dataUrl = await blobToDataURL(outputBlob);
-      const win = window.open();
-      if (win) { win.location.href = dataUrl; }
-      else { triggerDataUrlDownload(dataUrl, outputFileName); }
-    } catch(e){
-      const url = URL.createObjectURL(outputBlob);
-      window.open(url, '_blank');
-    }
+    // window.open must be the very first thing in the handler (no await
+    // before it) or mobile Safari treats it as a popup and blocks it.
+    const win = window.open('', '_blank');
+    const url = outputObjectUrl || outputDataUrl;
+    if (win && url) { win.location.href = url; }
+    else if (url) { triggerUrlDownload(url, outputFileName); }
   });
 
   document.getElementById('share-btn').addEventListener('click', async () => {
     if (!outputBlob) return;
+    const file = outputFile || new File([outputBlob], outputFileName, { type: outputMime });
     try {
-      const file = new File([outputBlob], outputFileName, { type: outputMime });
-      await navigator.share({ files:[file], title: outputFileName });
+      let shareData = { files:[file], title: outputFileName };
+      try {
+        if (navigator.canShare && !navigator.canShare(shareData)) shareData = { title: outputFileName };
+      } catch(e){ /* canShare itself threw — still try sharing the file */ }
+      await navigator.share(shareData);
     } catch(e){ /* user cancelled or unsupported — Download/Open remain as fallback */ }
   });
 
   document.getElementById('new-btn').addEventListener('click', () => {
+    if (outputObjectUrl) { URL.revokeObjectURL(outputObjectUrl); outputObjectUrl = null; }
+    outputBlob = null; outputDataUrl = null; outputFile = null;
     resetFile();
     showScreen(homeScreen);
   });
