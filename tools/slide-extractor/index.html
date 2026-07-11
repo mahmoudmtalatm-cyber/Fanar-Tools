@@ -301,7 +301,16 @@
 
 <script>
   // ---------- Telegram Mini App wiring ----------
+  // telegram-web-app.js defines window.Telegram.WebApp unconditionally, even
+  // when the page is just opened in a normal browser — so `tg` alone is
+  // truthy everywhere and can't be used to detect a real Telegram session.
+  // tg.initData is only populated when Telegram itself actually launched the
+  // page; it's the empty string otherwise. That's what genuinely tells the
+  // two situations apart, and it's why downloads were broken everywhere,
+  // not just on phone: every environment was wrongly being treated as "inside
+  // Telegram".
   const tg = window.Telegram ? window.Telegram.WebApp : null;
+  const inTelegram = !!(tg && typeof tg.initData === 'string' && tg.initData.length > 0);
   if (tg) {
     tg.ready();
     tg.expand();
@@ -524,9 +533,10 @@
   const logEl = document.getElementById('log');
   const scanSub = document.getElementById('scan-sub');
 
-  function addLogLine(timeSec, idx){
+  function addLogLine(timeSec, idx, isUpdate){
     const line = document.createElement('div');
-    line.innerHTML = fmtTime(timeSec) + '  <span>change detected \u2192 slide ' + idx + '</span>';
+    const label = isUpdate ? ('more detail added \u2192 slide ' + idx) : ('change detected \u2192 slide ' + idx);
+    line.innerHTML = fmtTime(timeSec) + '  <span>' + label + '</span>';
     logEl.appendChild(line);
     logEl.scrollTop = logEl.scrollHeight;
     while (logEl.children.length > 20) logEl.removeChild(logEl.firstChild);
@@ -626,8 +636,16 @@
     normal: { changeFrac: 0.35, stillFrac: 0.18, stableSec: 0.7, sampleStep: 0.35 },
     coarse: { changeFrac: 0.45, stillFrac: 0.20, stableSec: 0.9, sampleStep: 0.5  }
   };
-  const MIN_GAP_SEC = 1.0;              // don't capture two slides closer together than this
+  const MIN_GAP_SEC = 1.0;              // don't capture two *distinct new* slides closer together than this
   const FALLBACK_FIRST_CAPTURE_SEC = 4; // guarantee an opening slide even on constantly-noisy video
+  const MIN_UPDATE_FRAC = 0.02;         // any settled change bigger than "essentially nothing" is worth
+                                         // re-examining — this is deliberately far below preset.changeFrac,
+                                         // which is tuned for "is this a whole new slide", not "did a single
+                                         // bullet/image just land". Gating on the bigger number was the bug:
+                                         // small build-up steps near the end of a slide (one last bullet
+                                         // added right before the presenter clicks on) never crossed it, so
+                                         // the truly-final version of that slide was never captured at all —
+                                         // no amount of post-hoc dedupe can recover a frame that was never taken.
 
   // ---------- Post-scan dedup: tell a "build-up" from a real new slide ----------
   // Presenters often reveal a slide piece by piece — a bullet, then an image,
@@ -732,19 +750,41 @@
       const dataURL = captureCanvas.toDataURL('image/jpeg', 0.86);
       capturedSlides.push({ dataURL, w: targetW, h: targetH, t: time, diffSnap });
       addMark((time / duration) * 100);
-      addLogLine(time, capturedSlides.length);
+      addLogLine(time, capturedSlides.length, false);
       foundEl.textContent = capturedSlides.length + ' slide' + (capturedSlides.length===1?'':'s') + ' found';
     }
 
+    // Same slide, just more of it has landed on screen (another bullet or
+    // image revealed) — replace the capture we already have for this slide
+    // instead of adding a new page, so whatever ends up kept is always the
+    // most complete version seen before the presenter actually moves on.
+    function updateSlideAt(index, time, diffSnap){
+      captureCtx.drawImage(videoEl, 0, 0, targetW, targetH);
+      const dataURL = captureCanvas.toDataURL('image/jpeg', 0.86);
+      capturedSlides[index] = { dataURL, w: targetW, h: targetH, t: time, diffSnap };
+      addLogLine(time, index + 1, true);
+    }
+
     // State for the "wait until it stops moving" detector. A slide is only
-    // captured once the picture has been essentially unchanged for
+    // examined once the picture has been essentially unchanged for
     // `stableSec` seconds, so mid-transition / mid-animation frames never
-    // get grabbed — we always land on the finished, fully-built slide.
-    let baselineData = null;      // low-res frame data of the last CAPTURED slide
+    // get grabbed — we always land on a finished, settled frame.
+    //
+    // Every time we settle on a new frame that differs at all from the last
+    // one we kept (baselineData), buildRelation() decides what kind of
+    // difference it is:
+    //   - additive  → the same slide just gained detail (a bullet/image
+    //     landed) → UPDATE the existing capture in place. This is the fix
+    //     for slides being left incomplete: we no longer wait for a large
+    //     cumulative change before caring about an update, so the very last
+    //     small addition right before the presenter clicks on is no longer
+    //     dropped.
+    //   - a swap    → genuinely a new slide → capture it as a new page.
+    let baselineData = null;      // low-res frame data of the slide we're currently tracking
+    let baselineIndex = -1;       // its index in capturedSlides
     let prevSampleData = null;    // low-res frame data of the previous sample
     let stillStreakStart = null;  // timestamp when the current stillness streak began
-    let pendingCandidate = true;  // is a not-yet-captured slide currently forming?
-    let lastCaptureT = -999;
+    let lastCaptureT = -999;      // timestamp of the last genuinely NEW slide (not update)
     let t = 0;
 
     while (t <= duration){
@@ -760,13 +800,6 @@
           if (stillStreakStart === null) stillStreakStart = t;
         } else {
           stillStreakStart = null; // still animating/transitioning — keep waiting
-        }
-      }
-
-      if (!pendingCandidate && baselineData !== null){
-        const changeFrac = blockChangeFraction(baselineData, diffData, excludeFrac);
-        if (changeFrac >= preset.changeFrac){
-          pendingCandidate = true;
           scanSub.textContent = 'Change detected — waiting for it to settle…';
         }
       }
@@ -774,12 +807,29 @@
       const stableEnough = stillStreakStart !== null && (t - stillStreakStart) >= preset.stableSec;
       const forceFirstCapture = baselineData === null && t >= FALLBACK_FIRST_CAPTURE_SEC;
 
-      if (pendingCandidate && (stableEnough || forceFirstCapture) && (t - lastCaptureT) >= MIN_GAP_SEC){
-        captureSlideAt(t, diffData);
-        baselineData = diffData;
-        lastCaptureT = t;
-        pendingCandidate = false;
-        scanSub.textContent = 'Scanning for slide changes…';
+      if (stableEnough || forceFirstCapture){
+        if (baselineData === null){
+          captureSlideAt(t, diffData);
+          baselineIndex = capturedSlides.length - 1;
+          baselineData = diffData;
+          lastCaptureT = t;
+          scanSub.textContent = 'Scanning for slide changes…';
+        } else {
+          const changeFrac = blockChangeFraction(baselineData, diffData, excludeFrac);
+          if (changeFrac > MIN_UPDATE_FRAC){
+            const rel = buildRelation(baselineData, diffData, excludeFrac);
+            if (rel.additive){
+              updateSlideAt(baselineIndex, t, diffData);
+              baselineData = diffData;
+            } else if ((t - lastCaptureT) >= MIN_GAP_SEC){
+              captureSlideAt(t, diffData);
+              baselineIndex = capturedSlides.length - 1;
+              baselineData = diffData;
+              lastCaptureT = t;
+            }
+            scanSub.textContent = 'Scanning for slide changes…';
+          }
+        }
       }
 
       prevSampleData = diffData;
@@ -797,9 +847,18 @@
     scanSub.textContent = 'Checking final frame…';
     await seekTo(duration);
     const finalDiffData = grabDiffFrame();
-    const finalChangeFrac = baselineData ? blockChangeFraction(baselineData, finalDiffData, excludeFrac) : Infinity;
-    if ((baselineData === null || finalChangeFrac >= preset.changeFrac * 0.6) && (duration - lastCaptureT) >= 0.3){
+    if (baselineData === null){
       captureSlideAt(duration, finalDiffData);
+    } else {
+      const finalChangeFrac = blockChangeFraction(baselineData, finalDiffData, excludeFrac);
+      if (finalChangeFrac > MIN_UPDATE_FRAC){
+        const rel = buildRelation(baselineData, finalDiffData, excludeFrac);
+        if (rel.additive){
+          updateSlideAt(baselineIndex, duration, finalDiffData);
+        } else if ((duration - lastCaptureT) >= 0.3){
+          captureSlideAt(duration, finalDiffData);
+        }
+      }
     }
 
     if (capturedSlides.length === 0){
@@ -879,28 +938,39 @@
     shareBtn.style.display = (typeof navigator.share === 'function') ? 'flex' : 'none';
   }
 
-  // Downloading inside embedded/in-app browsers (Telegram's WebView chief
-  // among them) is where things go quiet: a blob: URL + anchor "download"
-  // attribute is frequently just ignored there, with no error thrown. A
-  // data: URI is honoured far more consistently. Inside Telegram specifically
-  // we skip the anchor trick altogether and open the PDF directly — that
-  // lands in the phone's native PDF viewer, which has its own Save/Share
-  // controls in its toolbar.
+  // Downloading inside Telegram's own embedded WebView is where things go
+  // quiet: an anchor "download" click is frequently just ignored there, with
+  // no error thrown. Opening the PDF directly lands in the phone's native
+  // PDF viewer instead, which has its own Save/Share controls in its
+  // toolbar — so that's the path used only when we've confirmed (via
+  // inTelegram, not just the presence of `tg`) that we're really inside
+  // Telegram.
+  //
+  // Everywhere else — a normal desktop or mobile browser, PC or phone — a
+  // blob: URL with an anchor's "download" attribute is the standard,
+  // reliable way to trigger a save. A data: URI was being used here before,
+  // and for a multi-page PDF that string can run into the tens of
+  // megabytes; several browsers (Chrome included) silently refuse to
+  // navigate to or download an over-sized data: URI, which is exactly why
+  // downloads had stopped working everywhere, not just on phone.
   function downloadPDF(){
-    if (!pdfDataURL) return;
-    if (tg){
-      window.open(pdfDataURL, '_blank');
+    if (!pdfBlob) return;
+    if (inTelegram){
+      if (tg.openLink) tg.openLink(pdfDataURL);
+      else window.open(pdfDataURL, '_blank');
       return;
     }
     try {
+      const url = URL.createObjectURL(pdfBlob);
       const a = document.createElement('a');
-      a.href = pdfDataURL;
+      a.href = url;
       a.download = pdfFileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch(e){
-      window.open(pdfDataURL, '_blank');
+      window.open(URL.createObjectURL(pdfBlob), '_blank');
     }
   }
 
